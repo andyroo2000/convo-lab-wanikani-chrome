@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ConvoLab WaniKani Tracker</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">CONVOLAB</p>
+        <h1>WaniKani Tracker</h1>
+      </header>
+
+      <section id="loading" aria-live="polite">
+        <p>Loading…</p>
+      </section>
+
+      <form id="sign-in-form" hidden>
+        <p class="help">Sign in to add active WaniKani review time to ConvoLab.</p>
+        <label>
+          Email
+          <input
+            id="email"
+            type="email"
+            autocomplete="username"
+            required
+          >
+        </label>
+        <label>
+          Password
+          <input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          >
+        </label>
+        <button type="submit">Sign in</button>
+      </form>
+
+      <section id="signed-in" aria-live="polite" hidden>
+        <div class="status-row">
+          <span id="tracking-dot" class="dot" aria-hidden="true"></span>
+          <div>
+            <strong id="tracking-label">Ready</strong>
+            <p id="account-label"></p>
+          </div>
+        </div>
+        <p id="pending-label" class="help"></p>
+        <div class="button-row">
+          <button id="sync" type="button">Sync now</button>
+          <button id="sign-out" class="secondary" type="button">Sign out</button>
+        </div>
+      </section>
+
+      <p id="error" class="error" role="alert" hidden></p>
+      <p class="privacy">
+        Records review-page activity only. Answers and page content stay private.
+      </p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

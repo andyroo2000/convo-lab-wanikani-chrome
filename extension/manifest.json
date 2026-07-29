@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ConvoLab WaniKani Tracker",
+  "description": "Records active WaniKani review time in ConvoLab.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "alarms",
+    "idle",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://convo-lab.com/*",
+    "https://wanikani.com/*",
+    "https://*.wanikani.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ConvoLab WaniKani Tracker"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://wanikani.com/*",
+        "https://*.wanikani.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
