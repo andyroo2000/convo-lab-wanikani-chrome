@@ -7,6 +7,7 @@ import {
   isCandidatePageState,
   isPermanentUploadStatus,
   isReviewURL,
+  isTrustedExtensionPageSender,
   isWaniKaniURL,
   normalizeQueueEntry,
   nextUploadBatch,
@@ -54,6 +55,39 @@ test("port disconnect only forgets tabs that closed or left WaniKani", () => {
     true,
   );
   assert.equal(shouldForgetTabStateAfterDisconnect(null), true);
+});
+
+test("credential operations only accept messages from this extension page", () => {
+  const runtimeId = "abcdefghijklmnop";
+  assert.equal(
+    isTrustedExtensionPageSender({
+      id: runtimeId,
+      url: `chrome-extension://${runtimeId}/popup.html`,
+    }, runtimeId),
+    true,
+  );
+  assert.equal(
+    isTrustedExtensionPageSender({
+      id: runtimeId,
+      tab: { id: 7 },
+      url: "https://www.wanikani.com/subjects/review",
+    }, runtimeId),
+    false,
+  );
+  assert.equal(
+    isTrustedExtensionPageSender({
+      id: runtimeId,
+      url: "https://example.com/",
+    }, runtimeId),
+    false,
+  );
+  assert.equal(
+    isTrustedExtensionPageSender({
+      id: "different-extension",
+      url: `chrome-extension://${runtimeId}/popup.html`,
+    }, runtimeId),
+    false,
+  );
 });
 
 test("idle expiration ends at the last interaction", () => {

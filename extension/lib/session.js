@@ -26,6 +26,18 @@ export function shouldForgetTabStateAfterDisconnect(tab) {
   return !tab || !isWaniKaniURL(tab.url);
 }
 
+export function isTrustedExtensionPageSender(sender, runtimeId) {
+  if (sender?.id !== runtimeId || sender.tab || typeof sender.url !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === "chrome-extension:" && url.hostname === runtimeId;
+  } catch {
+    return false;
+  }
+}
+
 export function sessionStartTime(now, _lastInteractionAt) {
   return now;
 }

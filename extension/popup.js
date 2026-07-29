@@ -55,14 +55,15 @@ signInForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setBusy(true);
   showError("");
+  const passwordInput = document.querySelector("#password");
   try {
     const email = document.querySelector("#email").value;
-    const password = document.querySelector("#password").value;
+    const password = passwordInput.value;
     render(await send({ type: "SIGN_IN", email, password }));
-    document.querySelector("#password").value = "";
   } catch (error) {
     showError(error.message);
   } finally {
+    passwordInput.value = "";
     setBusy(false);
   }
 });

@@ -3,6 +3,8 @@ import {
   appendBounded,
   isCandidatePageState,
   isPermanentUploadStatus,
+  isReviewURL,
+  isTrustedExtensionPageSender,
   isWaniKaniURL,
   nextUploadBatch,
   normalizeQueueEntry,
@@ -110,11 +112,11 @@ async function candidateState(now) {
     }
     try {
       const tab = await chrome.tabs.get(state.tabId);
-      const window = await chrome.windows.get(tab.windowId);
-      if (isWaniKaniURL(tab.url) && tab.active && window.focused) {
+      const browserWindow = await chrome.windows.get(tab.windowId);
+      if (isReviewURL(tab.url) && tab.active && browserWindow.focused) {
         return { state, idleExpired: false };
       }
-      if (!isWaniKaniURL(tab.url)) {
+      if (!isReviewURL(tab.url)) {
         tabStates.delete(state.tabId);
       }
     } catch {
@@ -422,6 +424,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : null,
     });
     runTracking(() => reconcile());
+    return false;
+  }
+
+  if (!isTrustedExtensionPageSender(sender, chrome.runtime.id)) {
     return false;
   }
 
