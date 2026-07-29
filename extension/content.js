@@ -9,7 +9,7 @@
     return {
       kind,
       url: window.location.href,
-      visible: document.visibilityState === "visible",
+      visible: kind !== "pagehide" && document.visibilityState === "visible",
       lastInteractionAt,
     };
   }

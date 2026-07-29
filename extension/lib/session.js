@@ -22,6 +22,23 @@ export function isReviewURL(value) {
   return path === "/subjects/review" || path.startsWith("/subjects/review/");
 }
 
+export function sessionStartTime(now, _lastInteractionAt) {
+  return now;
+}
+
+export function trackingTransition({ activeTabId, candidateTabId }) {
+  if (activeTabId == null && candidateTabId == null) {
+    return "none";
+  }
+  if (activeTabId == null) {
+    return "start";
+  }
+  if (candidateTabId == null) {
+    return "stop";
+  }
+  return activeTabId === candidateTabId ? "continue" : "switch";
+}
+
 export function sessionEndTime({
   startedAt,
   now,
@@ -33,6 +50,14 @@ export function sessionEndTime({
     ? lastInteractionAt
     : now;
   return Math.max(startedAt, Math.min(requestedEnd, now, maximumEnd));
+}
+
+export function savedSessionIDs(response) {
+  const sessions = Array.isArray(response) ? response : response?.data;
+  if (!Array.isArray(sessions)) {
+    throw new Error("ConvoLab returned an invalid activity-session batch.");
+  }
+  return new Set(sessions.map((session) => session.clientSessionId));
 }
 
 export function studySessionPayload(active, endedAt) {

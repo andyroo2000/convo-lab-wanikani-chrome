@@ -5,8 +5,11 @@ import {
   REVIEW_IDLE_MS,
   isReviewURL,
   isWaniKaniURL,
+  savedSessionIDs,
   sessionEndTime,
+  sessionStartTime,
   studySessionPayload,
+  trackingTransition,
 } from "../extension/lib/session.js";
 
 test("recognizes current WaniKani review routes", () => {
@@ -36,6 +39,41 @@ test("idle expiration ends at the last interaction", () => {
     }),
     lastInteractionAt,
   );
+});
+
+test("new sessions start now instead of backdating to stale interaction", () => {
+  const now = 50_000;
+  assert.equal(sessionStartTime(now, 10_000), now);
+});
+
+test("tracking transitions distinguish start, stop, continue, and tab switch", () => {
+  assert.equal(
+    trackingTransition({ activeTabId: null, candidateTabId: null }),
+    "none",
+  );
+  assert.equal(
+    trackingTransition({ activeTabId: null, candidateTabId: 4 }),
+    "start",
+  );
+  assert.equal(
+    trackingTransition({ activeTabId: 4, candidateTabId: null }),
+    "stop",
+  );
+  assert.equal(
+    trackingTransition({ activeTabId: 4, candidateTabId: 4 }),
+    "continue",
+  );
+  assert.equal(
+    trackingTransition({ activeTabId: 4, candidateTabId: 8 }),
+    "switch",
+  );
+});
+
+test("accepts raw and enveloped batch responses", () => {
+  const sessions = [{ clientSessionId: "session-1" }];
+  assert.deepEqual([...savedSessionIDs(sessions)], ["session-1"]);
+  assert.deepEqual([...savedSessionIDs({ data: sessions })], ["session-1"]);
+  assert.throws(() => savedSessionIDs({ sessions }), /invalid activity-session batch/);
 });
 
 test("focused session ends now and is capped at one day", () => {

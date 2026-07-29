@@ -7,7 +7,8 @@
   "permissions": [
     "alarms",
     "idle",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://convo-lab.com/*",

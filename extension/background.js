@@ -2,15 +2,18 @@ import {
   REVIEW_IDLE_MS,
   isReviewURL,
   isWaniKaniURL,
+  savedSessionIDs,
   sessionEndTime,
+  sessionStartTime,
   studySessionPayload,
+  trackingTransition,
 } from "./lib/session.js";
 
 const API_BASE_URL = "https://convo-lab.com";
 const TOKEN_KEY = "convoLabAccessToken";
 const USER_KEY = "convoLabUser";
 const ACTIVE_KEY = "activeWaniKaniSession";
-const QUEUE_KEY = "pendingWaniKaniSessions";
+const QUEUE_KEY = "pendingWaniKaniSessionsByUser";
 const ERROR_KEY = "lastSyncError";
 const BROWSER_SESSION_KEY = "convoLabBrowserSession";
 const ALARM_NAME = "convoLabWaniKaniReconcile";
@@ -123,12 +126,17 @@ async function restoreTabStates() {
 }
 
 async function startSession(state, now) {
-  const startedAt = Math.min(now, state.lastInteractionAt || now);
+  const values = await stored([TOKEN_KEY, USER_KEY]);
+  if (!values[TOKEN_KEY] || !values[USER_KEY]?.id) {
+    return;
+  }
+  const startedAt = sessionStartTime(now);
   const active = {
     clientSessionId: crypto.randomUUID(),
+    userId: String(values[USER_KEY].id),
     tabId: state.tabId,
     startedAt,
-    lastInteractionAt: state.lastInteractionAt || startedAt,
+    lastInteractionAt: Math.max(startedAt, state.lastInteractionAt || startedAt),
   };
   await chrome.storage.local.set({ [ACTIVE_KEY]: active });
   await updateBadge(true);
@@ -148,21 +156,36 @@ async function finishSession({ now = Date.now(), idleExpired = false } = {}) {
     lastInteractionAt: active.lastInteractionAt,
     idleExpired,
   });
-  const queue = values[QUEUE_KEY] || [];
+  const queues = values[QUEUE_KEY] || {};
   if (endedAt - active.startedAt >= MIN_SESSION_MS) {
-    queue.push(studySessionPayload(active, endedAt));
+    const userQueue = queues[active.userId] || [];
+    userQueue.push(studySessionPayload(active, endedAt));
+    queues[active.userId] = userQueue;
   }
-  await chrome.storage.local.set({ [QUEUE_KEY]: queue });
+  await chrome.storage.local.set({ [QUEUE_KEY]: queues });
   await chrome.storage.local.remove(ACTIVE_KEY);
   await updateBadge(false);
 }
 
 async function reconcile(now = Date.now()) {
-  const values = await stored(ACTIVE_KEY);
+  const values = await stored([ACTIVE_KEY, TOKEN_KEY, USER_KEY]);
   const active = values[ACTIVE_KEY];
+  if (!values[TOKEN_KEY] || !values[USER_KEY]?.id) {
+    if (active) {
+      await finishSession({ now });
+    }
+    return;
+  }
   const candidate = await candidateState(now);
+  const transition = trackingTransition({
+    activeTabId: active?.tabId ?? null,
+    candidateTabId: candidate.state?.tabId ?? null,
+  });
 
-  if (!candidate.state) {
+  if (transition === "none") {
+    return;
+  }
+  if (transition === "stop") {
     if (active) {
       const idleExpired = candidate.idleExpired
         || now - active.lastInteractionAt >= REVIEW_IDLE_MS;
@@ -172,12 +195,12 @@ async function reconcile(now = Date.now()) {
     return;
   }
 
-  if (!active) {
+  if (transition === "start") {
     await startSession(candidate.state, now);
     return;
   }
 
-  if (active.tabId !== candidate.state.tabId) {
+  if (transition === "switch") {
     await finishSession({ now });
     await startSession(candidate.state, now);
     await flushPending();
@@ -192,9 +215,11 @@ async function reconcile(now = Date.now()) {
 }
 
 async function flushPending() {
-  const values = await stored([TOKEN_KEY, QUEUE_KEY]);
+  const values = await stored([TOKEN_KEY, USER_KEY, QUEUE_KEY]);
   const token = values[TOKEN_KEY];
-  const queue = values[QUEUE_KEY] || [];
+  const userId = values[USER_KEY]?.id;
+  const queues = values[QUEUE_KEY] || {};
+  const queue = userId ? (queues[String(userId)] || []) : [];
   if (!token || queue.length === 0) {
     return;
   }
@@ -206,15 +231,19 @@ async function flushPending() {
       method: "POST",
       body: { sessions: batch },
     });
-    const savedIDs = new Set(saved.map((session) => session.clientSessionId));
+    const savedIDs = savedSessionIDs(saved);
     const remaining = queue.filter(
       (session) => !savedIDs.has(session.clientSessionId),
     );
+    queues[String(userId)] = remaining;
     await chrome.storage.local.set({
-      [QUEUE_KEY]: remaining,
+      [QUEUE_KEY]: queues,
       [ERROR_KEY]: null,
     });
   } catch (error) {
+    if (error.status === 401) {
+      await chrome.storage.local.remove(TOKEN_KEY);
+    }
     await chrome.storage.local.set({
       [ERROR_KEY]: error.status === 401
         ? "ConvoLab sign-in expired. Sign in again to sync."
@@ -267,11 +296,13 @@ async function status() {
     QUEUE_KEY,
     ERROR_KEY,
   ]);
+  const userId = values[USER_KEY]?.id;
+  const queues = values[QUEUE_KEY] || {};
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
     user: values[USER_KEY] || null,
     tracking: Boolean(values[ACTIVE_KEY]),
-    pendingCount: (values[QUEUE_KEY] || []).length,
+    pendingCount: userId ? (queues[String(userId)] || []).length : 0,
     error: values[ERROR_KEY] || null,
   };
 }
