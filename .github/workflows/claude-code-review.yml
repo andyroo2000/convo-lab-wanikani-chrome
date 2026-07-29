@@ -1,0 +1,41 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this Chrome extension pull request for:
+            - correctness and likely runtime bugs
+            - Manifest V3 service-worker lifecycle behavior
+            - tab, window, visibility, and idle tracking boundaries
+            - retry safety and duplicate session prevention
+            - credential storage, message validation, and least-privilege permissions
+            - accessibility and focused test coverage
+
+            Use CLAUDE.md for repository-specific guidance.
+            Leave focused, actionable feedback with `gh pr comment`.
+
+          claude_args: '--allowed-tools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
