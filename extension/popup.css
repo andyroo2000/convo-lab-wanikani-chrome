@@ -1,0 +1,132 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  color: #143a66;
+  background: #fff8e7;
+}
+
+body {
+  margin: 0;
+  width: 330px;
+}
+
+main {
+  padding: 20px;
+}
+
+header {
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: #f06b61;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+p {
+  margin: 0;
+}
+
+.help,
+.privacy {
+  color: #5d6772;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #bdc7d0;
+  border-radius: 8px;
+  font: inherit;
+}
+
+button {
+  padding: 9px 13px;
+  border: 0;
+  border-radius: 999px;
+  color: white;
+  background: #143a66;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+button.secondary {
+  color: #143a66;
+  background: #e5ebef;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 12px;
+}
+
+.status-row p {
+  margin-top: 3px;
+  color: #5d6772;
+  font-size: 12px;
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #9aa5af;
+}
+
+.dot.tracking {
+  background: #2ca56c;
+  box-shadow: 0 0 0 4px rgb(44 165 108 / 16%);
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.error {
+  margin-top: 12px;
+  padding: 9px;
+  border-radius: 8px;
+  color: #8b1e1e;
+  background: #fde8e6;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.privacy {
+  margin-top: 18px;
+  padding-top: 13px;
+  border-top: 1px solid #ded8c9;
+}
