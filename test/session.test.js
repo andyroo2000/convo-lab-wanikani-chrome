@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import {
   MAX_SESSION_MS,
   REVIEW_IDLE_MS,
+  appendBounded,
   isCandidatePageState,
   isReviewURL,
   isWaniKaniURL,
+  normalizeQueueEntry,
+  partitionQueueAfterResponse,
   savedSessionIDs,
   sessionEndTime,
   sessionStartTime,
@@ -103,6 +106,57 @@ test("accepts raw and enveloped batch responses", () => {
   assert.deepEqual([...savedSessionIDs(sessions)], ["session-1"]);
   assert.deepEqual([...savedSessionIDs({ data: sessions })], ["session-1"]);
   assert.throws(() => savedSessionIDs({ sessions }), /invalid activity-session batch/);
+});
+
+test("retry queue removes saved entries and dead-letters poison entries", () => {
+  const good = normalizeQueueEntry({
+    clientSessionId: "good",
+    durationMs: 1_000,
+  });
+  const poison = {
+    session: { clientSessionId: "poison", durationMs: -1 },
+    attempts: 2,
+  };
+  const result = partitionQueueAfterResponse(
+    [good, poison],
+    new Set(["good"]),
+  );
+  assert.deepEqual(result.remaining, []);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0].session.clientSessionId, "poison");
+  assert.equal(result.failed[0].attempts, 3);
+});
+
+test("failed batches can be isolated without discarding valid neighbors", () => {
+  const queue = [
+    normalizeQueueEntry({ clientSessionId: "good" }),
+    normalizeQueueEntry({ clientSessionId: "poison" }),
+  ];
+  const isolated = partitionQueueAfterResponse(queue, new Set(), {
+    batchSize: 2,
+    maxAttempts: Number.POSITIVE_INFINITY,
+  });
+  assert.equal(isolated.failed.length, 0);
+  assert.deepEqual(
+    isolated.remaining.map((entry) => entry.attempts),
+    [1, 1],
+  );
+
+  const goodSaved = partitionQueueAfterResponse(
+    isolated.remaining,
+    new Set(["good"]),
+    { batchSize: 1 },
+  );
+  assert.deepEqual(
+    goodSaved.remaining.map((entry) => entry.session.clientSessionId),
+    ["poison"],
+  );
+});
+
+test("bounded queues discard only the oldest overflow", () => {
+  const result = appendBounded(["one", "two"], "three", 2);
+  assert.deepEqual(result.items, ["two", "three"]);
+  assert.deepEqual(result.dropped, ["one"]);
 });
 
 test("focused session ends now and is capped at one day", () => {

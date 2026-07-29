@@ -31,7 +31,10 @@
     });
   }
 
-  function noteActivity() {
+  function noteActivity(event) {
+    if (!event.isTrusted) {
+      return;
+    }
     const now = Date.now();
     lastInteractionAt = now;
     if (now - lastActivityMessageAt < ACTIVITY_THROTTLE_MS) {

@@ -46,6 +46,9 @@ function render(status) {
   pendingLabel.textContent = status.pendingCount
     ? `${status.pendingCount} completed session${status.pendingCount === 1 ? "" : "s"} waiting to sync.`
     : "All completed sessions are synced.";
+  if (status.failedCount) {
+    pendingLabel.textContent += ` ${status.failedCount} session${status.failedCount === 1 ? "" : "s"} could not be synced.`;
+  }
 }
 
 signInForm.addEventListener("submit", async (event) => {

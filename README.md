@@ -17,7 +17,9 @@ timestamps. It never reads or transmits WaniKani answers, form values, or page
 content.
 
 Completed sessions are submitted to `https://convo-lab.com` using retry-safe
-client UUIDs. Failed uploads remain queued separately for each ConvoLab account.
+client UUIDs. Failed uploads remain in bounded queues separated by ConvoLab
+account; permanently invalid entries are isolated so they cannot block later
+sessions.
 The ConvoLab access token is stored in `chrome.storage.local` with access
 restricted to trusted extension contexts, so WaniKani content scripts cannot
 read it. A host-scoped content-script connection closes when a WaniKani tab

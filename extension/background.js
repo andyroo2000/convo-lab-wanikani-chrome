@@ -1,7 +1,10 @@
 import {
   REVIEW_IDLE_MS,
+  appendBounded,
   isCandidatePageState,
   isWaniKaniURL,
+  normalizeQueueEntry,
+  partitionQueueAfterResponse,
   savedSessionIDs,
   sessionEndTime,
   sessionStartTime,
@@ -14,11 +17,15 @@ const TOKEN_KEY = "convoLabAccessToken";
 const USER_KEY = "convoLabUser";
 const ACTIVE_KEY = "activeWaniKaniSession";
 const QUEUE_KEY = "pendingWaniKaniSessionsByUser";
+const DEAD_LETTER_KEY = "failedWaniKaniSessionsByUser";
 const ERROR_KEY = "lastSyncError";
 const TRACKING_ERROR_KEY = "lastTrackingError";
 const BROWSER_SESSION_KEY = "convoLabBrowserSession";
 const ALARM_NAME = "convoLabWaniKaniReconcile";
 const MIN_SESSION_MS = 1_000;
+const MAX_PENDING_SESSIONS = 1_000;
+const MAX_FAILED_SESSIONS = 20;
+const MAX_UPLOAD_ATTEMPTS = 3;
 
 const tabStates = new Map();
 let work = Promise.resolve();
@@ -41,6 +48,18 @@ function runTracking(operation) {
 
 async function stored(keys) {
   return chrome.storage.local.get(keys);
+}
+
+function appendFailedEntries(failed, entries, reason) {
+  let bounded = failed;
+  for (const entry of entries) {
+    bounded = appendBounded(
+      bounded,
+      { ...normalizeQueueEntry(entry), reason },
+      MAX_FAILED_SESSIONS,
+    ).items;
+  }
+  return bounded;
 }
 
 async function updateBadge(tracking) {
@@ -158,7 +177,7 @@ async function startSession(state, now) {
 }
 
 async function finishSession({ now = Date.now(), idleExpired = false } = {}) {
-  const values = await stored([ACTIVE_KEY, QUEUE_KEY]);
+  const values = await stored([ACTIVE_KEY, QUEUE_KEY, DEAD_LETTER_KEY]);
   const active = values[ACTIVE_KEY];
   if (!active) {
     await updateBadge(false);
@@ -172,12 +191,25 @@ async function finishSession({ now = Date.now(), idleExpired = false } = {}) {
     idleExpired,
   });
   const queues = values[QUEUE_KEY] || {};
+  const failedQueues = values[DEAD_LETTER_KEY] || {};
   if (endedAt - active.startedAt >= MIN_SESSION_MS) {
-    const userQueue = queues[active.userId] || [];
-    userQueue.push(studySessionPayload(active, endedAt));
-    queues[active.userId] = userQueue;
+    const userQueue = (queues[active.userId] || []).map(normalizeQueueEntry);
+    const appended = appendBounded(
+      userQueue,
+      { session: studySessionPayload(active, endedAt), attempts: 0 },
+      MAX_PENDING_SESSIONS,
+    );
+    queues[active.userId] = appended.items;
+    failedQueues[active.userId] = appendFailedEntries(
+      failedQueues[active.userId] || [],
+      appended.dropped,
+      "Queue capacity exceeded",
+    );
   }
-  await chrome.storage.local.set({ [QUEUE_KEY]: queues });
+  await chrome.storage.local.set({
+    [QUEUE_KEY]: queues,
+    [DEAD_LETTER_KEY]: failedQueues,
+  });
   await chrome.storage.local.remove(ACTIVE_KEY);
   await updateBadge(false);
 }
@@ -230,34 +262,82 @@ async function reconcile(now = Date.now()) {
 }
 
 async function flushPending() {
-  const values = await stored([TOKEN_KEY, USER_KEY, QUEUE_KEY]);
+  const values = await stored([
+    TOKEN_KEY,
+    USER_KEY,
+    QUEUE_KEY,
+    DEAD_LETTER_KEY,
+  ]);
   const token = values[TOKEN_KEY];
   const userId = values[USER_KEY]?.id;
   const queues = values[QUEUE_KEY] || {};
-  const queue = userId ? (queues[String(userId)] || []) : [];
+  const userKey = userId ? String(userId) : null;
+  const queue = userKey
+    ? (queues[userKey] || []).map(normalizeQueueEntry)
+    : [];
   if (!token || queue.length === 0) {
     return;
   }
 
   try {
-    const batch = queue.slice(0, 50);
+    const batchSize = queue.some((entry) => entry.attempts > 0) ? 1 : 50;
+    const batch = queue.slice(0, batchSize);
     const saved = await fetchJSON("/api/study/activity-sessions/batch", {
       token,
       method: "POST",
-      body: { sessions: batch },
+      body: { sessions: batch.map((entry) => entry.session) },
     });
     const savedIDs = savedSessionIDs(saved);
-    const remaining = queue.filter(
-      (session) => !savedIDs.has(session.clientSessionId),
+    const partition = partitionQueueAfterResponse(
+      queue,
+      savedIDs,
+      { batchSize, maxAttempts: MAX_UPLOAD_ATTEMPTS },
     );
-    queues[String(userId)] = remaining;
+    queues[userKey] = partition.remaining;
+    const failedQueues = values[DEAD_LETTER_KEY] || {};
+    failedQueues[userKey] = appendFailedEntries(
+      failedQueues[userKey] || [],
+      partition.failed,
+      "Server did not accept the session",
+    );
     await chrome.storage.local.set({
       [QUEUE_KEY]: queues,
+      [DEAD_LETTER_KEY]: failedQueues,
       [ERROR_KEY]: null,
     });
   } catch (error) {
     if (error.status === 401) {
       await chrome.storage.local.remove(TOKEN_KEY);
+    }
+    const isPermanent = (
+      error.status >= 400
+      && error.status < 500
+      && ![401, 408, 429].includes(error.status)
+    );
+    if (isPermanent) {
+      const batchSize = queue.some((entry) => entry.attempts > 0) ? 1 : 50;
+      const isolatingBatch = queue.slice(0, batchSize);
+      const partition = partitionQueueAfterResponse(
+        queue,
+        new Set(),
+        {
+          batchSize,
+          maxAttempts: isolatingBatch.length > 1
+            ? Number.POSITIVE_INFINITY
+            : MAX_UPLOAD_ATTEMPTS,
+        },
+      );
+      queues[userKey] = partition.remaining;
+      const failedQueues = values[DEAD_LETTER_KEY] || {};
+      failedQueues[userKey] = appendFailedEntries(
+        failedQueues[userKey] || [],
+        partition.failed,
+        error.message,
+      );
+      await chrome.storage.local.set({
+        [QUEUE_KEY]: queues,
+        [DEAD_LETTER_KEY]: failedQueues,
+      });
     }
     await chrome.storage.local.set({
       [ERROR_KEY]: error.status === 401
@@ -309,16 +389,19 @@ async function status() {
     USER_KEY,
     ACTIVE_KEY,
     QUEUE_KEY,
+    DEAD_LETTER_KEY,
     ERROR_KEY,
     TRACKING_ERROR_KEY,
   ]);
   const userId = values[USER_KEY]?.id;
   const queues = values[QUEUE_KEY] || {};
+  const failedQueues = values[DEAD_LETTER_KEY] || {};
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
     user: values[USER_KEY] || null,
     tracking: Boolean(values[ACTIVE_KEY]),
     pendingCount: userId ? (queues[String(userId)] || []).length : 0,
+    failedCount: userId ? (failedQueues[String(userId)] || []).length : 0,
     error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
   };
 }

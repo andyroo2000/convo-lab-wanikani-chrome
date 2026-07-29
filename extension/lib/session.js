@@ -70,6 +70,41 @@ export function savedSessionIDs(response) {
   return new Set(sessions.map((session) => session.clientSessionId));
 }
 
+export function normalizeQueueEntry(entry) {
+  return entry?.session
+    ? entry
+    : { session: entry, attempts: 0 };
+}
+
+export function partitionQueueAfterResponse(
+  queue,
+  savedIDs,
+  { batchSize = 50, maxAttempts = 3 } = {},
+) {
+  const batch = queue.slice(0, batchSize).map(normalizeQueueEntry);
+  const untouched = queue.slice(batchSize).map(normalizeQueueEntry);
+  const remaining = [];
+  const failed = [];
+
+  for (const entry of batch) {
+    if (savedIDs.has(entry.session.clientSessionId)) {
+      continue;
+    }
+    const retried = { ...entry, attempts: entry.attempts + 1 };
+    (retried.attempts >= maxAttempts ? failed : remaining).push(retried);
+  }
+  return { remaining: [...remaining, ...untouched], failed };
+}
+
+export function appendBounded(queue, value, maximum) {
+  const items = [...queue, value];
+  const overflow = Math.max(0, items.length - maximum);
+  return {
+    items: overflow ? items.slice(overflow) : items,
+    dropped: overflow ? items.slice(0, overflow) : [],
+  };
+}
+
 export function studySessionPayload(active, endedAt) {
   const boundedEnd = sessionEndTime({
     startedAt: active.startedAt,
