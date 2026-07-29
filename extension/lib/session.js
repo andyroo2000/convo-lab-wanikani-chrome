@@ -22,6 +22,10 @@ export function isReviewURL(value) {
   return path === "/subjects/review" || path.startsWith("/subjects/review/");
 }
 
+export function shouldForgetTabStateAfterDisconnect(tab) {
+  return !tab || !isWaniKaniURL(tab.url);
+}
+
 export function sessionStartTime(now, _lastInteractionAt) {
   return now;
 }

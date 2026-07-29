@@ -10,6 +10,7 @@ import {
   savedSessionIDs,
   sessionEndTime,
   sessionStartTime,
+  shouldForgetTabStateAfterDisconnect,
   studySessionPayload,
   trackingTransition,
 } from "./lib/session.js";
@@ -463,8 +464,19 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   const tabId = port.sender.tab.id;
   port.onDisconnect.addListener(() => {
-    tabStates.delete(tabId);
-    runTracking(() => reconcile());
+    runTracking(async () => {
+      let tab = null;
+      try {
+        tab = await chrome.tabs.get(tabId);
+      } catch {
+        // The tab was closed.
+      }
+      if (!shouldForgetTabStateAfterDisconnect(tab)) {
+        return;
+      }
+      tabStates.delete(tabId);
+      await reconcile();
+    });
   });
 });
 

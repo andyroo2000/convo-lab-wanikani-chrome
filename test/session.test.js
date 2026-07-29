@@ -14,6 +14,7 @@ import {
   savedSessionIDs,
   sessionEndTime,
   sessionStartTime,
+  shouldForgetTabStateAfterDisconnect,
   studySessionPayload,
   trackingTransition,
 } from "../extension/lib/session.js";
@@ -31,6 +32,28 @@ test("rejects insecure and lookalike WaniKani hosts", () => {
     false,
   );
   assert.equal(isWaniKaniURL("https://account.wanikani.com/login"), true);
+});
+
+test("port disconnect only forgets tabs that closed or left WaniKani", () => {
+  assert.equal(
+    shouldForgetTabStateAfterDisconnect({
+      url: "https://www.wanikani.com/subjects/review",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldForgetTabStateAfterDisconnect({
+      url: "https://www.wanikani.com/dashboard",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldForgetTabStateAfterDisconnect({
+      url: "https://example.com/",
+    }),
+    true,
+  );
+  assert.equal(shouldForgetTabStateAfterDisconnect(null), true);
 });
 
 test("idle expiration ends at the last interaction", () => {
