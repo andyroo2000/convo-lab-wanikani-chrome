@@ -39,7 +39,17 @@ export function isTrustedExtensionPageSender(sender, runtimeId) {
   }
 }
 
-export function sessionStartTime(now, _lastInteractionAt) {
+export function isValidPageState(tab, state) {
+  return Boolean(
+    tab?.id
+    && isWaniKaniURL(tab.url)
+    && isWaniKaniURL(state?.url)
+    && typeof state.visible === "boolean"
+    && (state.lastInteractionAt === null || Number.isFinite(state.lastInteractionAt)),
+  );
+}
+
+export function sessionStartTime(now) {
   return now;
 }
 
@@ -132,6 +142,27 @@ export function appendBounded(queue, value, maximum) {
     items: overflow ? items.slice(overflow) : items,
     dropped: overflow ? items.slice(0, overflow) : [],
   };
+}
+
+export function appendFailedEntries(
+  failed,
+  overflowCount,
+  entries,
+  reason,
+  maximum = 20,
+) {
+  let items = failed;
+  let overflow = overflowCount;
+  for (const entry of entries) {
+    const appended = appendBounded(
+      items,
+      { ...normalizeQueueEntry(entry), reason },
+      maximum,
+    );
+    items = appended.items;
+    overflow += appended.dropped.length;
+  }
+  return { items, overflowCount: overflow };
 }
 
 export function studySessionPayload(active, endedAt) {

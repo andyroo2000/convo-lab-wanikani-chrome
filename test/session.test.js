@@ -5,10 +5,12 @@ import {
   REVIEW_IDLE_MS,
   REVIEW_TAIL_GRACE_MS,
   appendBounded,
+  appendFailedEntries,
   isCandidatePageState,
   isPermanentUploadStatus,
   isReviewURL,
   isTrustedExtensionPageSender,
+  isValidPageState,
   isWaniKaniURL,
   normalizeQueueEntry,
   nextUploadBatch,
@@ -87,6 +89,34 @@ test("credential operations only accept messages from this extension page", () =
       id: "different-extension",
       url: `chrome-extension://${runtimeId}/popup.html`,
     }, runtimeId),
+    false,
+  );
+});
+
+test("page-state claims require matching trusted WaniKani contexts", () => {
+  const tab = {
+    id: 7,
+    url: "https://www.wanikani.com/subjects/review",
+  };
+  const state = {
+    url: "https://www.wanikani.com/subjects/review",
+    visible: true,
+    lastInteractionAt: 1_000,
+  };
+  assert.equal(isValidPageState(tab, state), true);
+  assert.equal(
+    isValidPageState(
+      { ...tab, url: "https://example.com/" },
+      state,
+    ),
+    false,
+  );
+  assert.equal(
+    isValidPageState(tab, { ...state, url: "https://example.com/" }),
+    false,
+  );
+  assert.equal(
+    isValidPageState(tab, { ...state, lastInteractionAt: "now" }),
     false,
   );
 });
@@ -247,6 +277,24 @@ test("bounded queues discard only the oldest overflow", () => {
   const result = appendBounded(["one", "two"], "three", 2);
   assert.deepEqual(result.items, ["two", "three"]);
   assert.deepEqual(result.dropped, ["one"]);
+});
+
+test("bounded failed queues retain a persistent overflow count", () => {
+  const result = appendFailedEntries(
+    [{ session: { clientSessionId: "one" }, attempts: 3 }],
+    4,
+    [
+      { session: { clientSessionId: "two" }, attempts: 3 },
+      { session: { clientSessionId: "three" }, attempts: 3 },
+    ],
+    "Server rejected session",
+    2,
+  );
+  assert.deepEqual(
+    result.items.map((entry) => entry.session.clientSessionId),
+    ["two", "three"],
+  );
+  assert.equal(result.overflowCount, 5);
 });
 
 test("focused session ends now and is capped at one day", () => {

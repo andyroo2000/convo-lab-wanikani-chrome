@@ -1,10 +1,12 @@
 import {
   REVIEW_IDLE_MS,
   appendBounded,
+  appendFailedEntries,
   isCandidatePageState,
   isPermanentUploadStatus,
   isReviewURL,
   isTrustedExtensionPageSender,
+  isValidPageState,
   isWaniKaniURL,
   nextUploadBatch,
   normalizeQueueEntry,
@@ -23,6 +25,7 @@ const USER_KEY = "convoLabUser";
 const ACTIVE_KEY = "activeWaniKaniSession";
 const QUEUE_KEY = "pendingWaniKaniSessionsByUser";
 const DEAD_LETTER_KEY = "failedWaniKaniSessionsByUser";
+const FAILED_OVERFLOW_KEY = "failedWaniKaniSessionOverflowByUser";
 const ERROR_KEY = "lastSyncError";
 const TRACKING_ERROR_KEY = "lastTrackingError";
 const BROWSER_SESSION_KEY = "convoLabBrowserSession";
@@ -53,18 +56,6 @@ function runTracking(operation) {
 
 async function stored(keys) {
   return chrome.storage.local.get(keys);
-}
-
-function appendFailedEntries(failed, entries, reason) {
-  let bounded = failed;
-  for (const entry of entries) {
-    bounded = appendBounded(
-      bounded,
-      { ...normalizeQueueEntry(entry), reason },
-      MAX_FAILED_SESSIONS,
-    ).items;
-  }
-  return bounded;
 }
 
 async function updateBadge(tracking) {
@@ -101,7 +92,7 @@ async function fetchJSON(path, { token, method = "GET", body } = {}) {
 async function candidateState(now) {
   const idleState = await chrome.idle.queryState(REVIEW_IDLE_MS / 1_000);
   if (idleState !== "active") {
-    return { state: null, idleExpired: true };
+    return { state: null };
   }
 
   for (const state of tabStates.values()) {
@@ -114,7 +105,7 @@ async function candidateState(now) {
       const tab = await chrome.tabs.get(state.tabId);
       const browserWindow = await chrome.windows.get(tab.windowId);
       if (isReviewURL(tab.url) && tab.active && browserWindow.focused) {
-        return { state, idleExpired: false };
+        return { state };
       }
       if (!isReviewURL(tab.url)) {
         tabStates.delete(state.tabId);
@@ -123,17 +114,7 @@ async function candidateState(now) {
       tabStates.delete(state.tabId);
     }
   }
-  return { state: null, idleExpired: false };
-}
-
-function validPageState(tab, state) {
-  return (
-    tab?.id
-    && isWaniKaniURL(tab.url)
-    && isWaniKaniURL(state?.url)
-    && typeof state.visible === "boolean"
-    && (state.lastInteractionAt === null || Number.isFinite(state.lastInteractionAt))
-  );
+  return { state: null };
 }
 
 async function restoreTabStates() {
@@ -148,7 +129,7 @@ async function restoreTabStates() {
       const state = await chrome.tabs.sendMessage(tab.id, {
         type: "REQUEST_WANIKANI_STATE",
       });
-      if (validPageState(tab, state)) {
+      if (isValidPageState(tab, state)) {
         tabStates.set(tab.id, {
           tabId: tab.id,
           url: state.url,
@@ -182,7 +163,12 @@ async function startSession(state, now) {
 }
 
 async function finishSession({ now = Date.now() } = {}) {
-  const values = await stored([ACTIVE_KEY, QUEUE_KEY, DEAD_LETTER_KEY]);
+  const values = await stored([
+    ACTIVE_KEY,
+    QUEUE_KEY,
+    DEAD_LETTER_KEY,
+    FAILED_OVERFLOW_KEY,
+  ]);
   const active = values[ACTIVE_KEY];
   if (!active) {
     await updateBadge(false);
@@ -196,6 +182,7 @@ async function finishSession({ now = Date.now() } = {}) {
   });
   const queues = values[QUEUE_KEY] || {};
   const failedQueues = values[DEAD_LETTER_KEY] || {};
+  const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
   if (endedAt - active.startedAt >= MIN_SESSION_MS) {
     const userQueue = (queues[active.userId] || []).map(normalizeQueueEntry);
     const appended = appendBounded(
@@ -204,15 +191,20 @@ async function finishSession({ now = Date.now() } = {}) {
       MAX_PENDING_SESSIONS,
     );
     queues[active.userId] = appended.items;
-    failedQueues[active.userId] = appendFailedEntries(
+    const failedResult = appendFailedEntries(
       failedQueues[active.userId] || [],
+      failedOverflow[active.userId] || 0,
       appended.dropped,
       "Queue capacity exceeded",
+      MAX_FAILED_SESSIONS,
     );
+    failedQueues[active.userId] = failedResult.items;
+    failedOverflow[active.userId] = failedResult.overflowCount;
   }
   await chrome.storage.local.set({
     [QUEUE_KEY]: queues,
     [DEAD_LETTER_KEY]: failedQueues,
+    [FAILED_OVERFLOW_KEY]: failedOverflow,
   });
   await chrome.storage.local.remove(ACTIVE_KEY);
   await updateBadge(false);
@@ -305,6 +297,7 @@ async function flushPending() {
     USER_KEY,
     QUEUE_KEY,
     DEAD_LETTER_KEY,
+    FAILED_OVERFLOW_KEY,
   ]);
   const token = values[TOKEN_KEY];
   const userId = values[USER_KEY]?.id;
@@ -322,14 +315,20 @@ async function flushPending() {
     const result = await uploadEntries(batch, token);
     queues[userKey] = [...result.remaining, ...queue.slice(batch.length)];
     const failedQueues = values[DEAD_LETTER_KEY] || {};
-    failedQueues[userKey] = appendFailedEntries(
+    const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
+    const failedResult = appendFailedEntries(
       failedQueues[userKey] || [],
+      failedOverflow[userKey] || 0,
       result.failed,
       "Server did not accept the session",
+      MAX_FAILED_SESSIONS,
     );
+    failedQueues[userKey] = failedResult.items;
+    failedOverflow[userKey] = failedResult.overflowCount;
     await chrome.storage.local.set({
       [QUEUE_KEY]: queues,
       [DEAD_LETTER_KEY]: failedQueues,
+      [FAILED_OVERFLOW_KEY]: failedOverflow,
       [ERROR_KEY]: null,
     });
   } catch (error) {
@@ -388,18 +387,23 @@ async function status() {
     ACTIVE_KEY,
     QUEUE_KEY,
     DEAD_LETTER_KEY,
+    FAILED_OVERFLOW_KEY,
     ERROR_KEY,
     TRACKING_ERROR_KEY,
   ]);
   const userId = values[USER_KEY]?.id;
   const queues = values[QUEUE_KEY] || {};
   const failedQueues = values[DEAD_LETTER_KEY] || {};
+  const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
+  const userKey = userId ? String(userId) : null;
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
     user: values[USER_KEY] || null,
     tracking: Boolean(values[ACTIVE_KEY]),
-    pendingCount: userId ? (queues[String(userId)] || []).length : 0,
-    failedCount: userId ? (failedQueues[String(userId)] || []).length : 0,
+    pendingCount: userKey ? (queues[userKey] || []).length : 0,
+    failedCount: userKey
+      ? (failedQueues[userKey] || []).length + (failedOverflow[userKey] || 0)
+      : 0,
     error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
   };
 }
@@ -410,7 +414,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "WANIKANI_PAGE_STATE") {
-    if (!validPageState(sender.tab, message)) {
+    if (!isValidPageState(sender.tab, message)) {
       return false;
     }
     tabStates.set(sender.tab.id, {
