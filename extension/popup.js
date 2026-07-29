@@ -35,6 +35,7 @@ function render(status) {
   showError(status.error);
 
   if (!status.signedIn) {
+    requestAnimationFrame(() => document.querySelector("#email").focus());
     return;
   }
   trackingDot.classList.toggle("tracking", status.tracking);

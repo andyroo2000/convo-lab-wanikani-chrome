@@ -20,8 +20,8 @@ Completed sessions are submitted to `https://convo-lab.com` using retry-safe
 client UUIDs. Failed uploads remain queued separately for each ConvoLab account.
 The ConvoLab access token is stored in `chrome.storage.local` with access
 restricted to trusted extension contexts, so WaniKani content scripts cannot
-read it. The extension requests tab metadata solely to stop tracking immediately
-when a review tab navigates away from WaniKani.
+read it. A host-scoped content-script connection closes when a WaniKani tab
+navigates elsewhere, stopping tracking without access to unrelated tab URLs.
 
 ## Local development
 

@@ -1,9 +1,10 @@
 (() => {
   const HEARTBEAT_MS = 15_000;
   const ACTIVITY_THROTTLE_MS = 1_000;
-  let lastInteractionAt = Date.now();
+  let lastInteractionAt = null;
   let lastActivityMessageAt = 0;
   let lastURL = window.location.href;
+  let lifecyclePort;
 
   function pageState(kind) {
     return {
@@ -20,6 +21,13 @@
       ...pageState(kind),
     }).catch(() => {
       // The service worker may be restarting. The next heartbeat retries.
+    });
+  }
+
+  function connectLifecyclePort() {
+    lifecyclePort = chrome.runtime.connect({ name: "wanikani-page-lifecycle" });
+    lifecyclePort.onDisconnect.addListener(() => {
+      lifecyclePort = null;
     });
   }
 
@@ -49,8 +57,14 @@
     return false;
   });
 
+  connectLifecyclePort();
   sendState("initial");
-  setInterval(() => sendState("heartbeat"), HEARTBEAT_MS);
+  setInterval(() => {
+    if (!lifecyclePort) {
+      connectLifecyclePort();
+    }
+    sendState("heartbeat");
+  }, HEARTBEAT_MS);
   setInterval(() => {
     if (window.location.href !== lastURL) {
       lastURL = window.location.href;

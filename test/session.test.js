@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MAX_SESSION_MS,
   REVIEW_IDLE_MS,
+  isCandidatePageState,
   isReviewURL,
   isWaniKaniURL,
   savedSessionIDs,
@@ -44,6 +45,34 @@ test("idle expiration ends at the last interaction", () => {
 test("new sessions start now instead of backdating to stale interaction", () => {
   const now = 50_000;
   assert.equal(sessionStartTime(now, 10_000), now);
+});
+
+test("candidate state requires a real, recent interaction", () => {
+  const now = 500_000;
+  const base = {
+    visible: true,
+    url: "https://www.wanikani.com/subjects/review",
+  };
+  assert.equal(
+    isCandidatePageState({ ...base, lastInteractionAt: null }, now),
+    false,
+  );
+  assert.equal(
+    isCandidatePageState({ ...base, lastInteractionAt: now - REVIEW_IDLE_MS + 1 }, now),
+    true,
+  );
+  assert.equal(
+    isCandidatePageState({ ...base, lastInteractionAt: now - REVIEW_IDLE_MS }, now),
+    false,
+  );
+  assert.equal(
+    isCandidatePageState({
+      ...base,
+      visible: false,
+      lastInteractionAt: now,
+    }, now),
+    false,
+  );
 });
 
 test("tracking transitions distinguish start, stop, continue, and tab switch", () => {

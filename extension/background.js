@@ -1,6 +1,6 @@
 import {
   REVIEW_IDLE_MS,
-  isReviewURL,
+  isCandidatePageState,
   isWaniKaniURL,
   savedSessionIDs,
   sessionEndTime,
@@ -15,6 +15,7 @@ const USER_KEY = "convoLabUser";
 const ACTIVE_KEY = "activeWaniKaniSession";
 const QUEUE_KEY = "pendingWaniKaniSessionsByUser";
 const ERROR_KEY = "lastSyncError";
+const TRACKING_ERROR_KEY = "lastTrackingError";
 const BROWSER_SESSION_KEY = "convoLabBrowserSession";
 const ALARM_NAME = "convoLabWaniKaniReconcile";
 const MIN_SESSION_MS = 1_000;
@@ -25,6 +26,17 @@ let work = Promise.resolve();
 function serialize(operation) {
   work = work.then(operation, operation);
   return work;
+}
+
+function runTracking(operation) {
+  serialize(operation)
+    .then(() => chrome.storage.local.remove(TRACKING_ERROR_KEY))
+    .catch(async (error) => {
+      console.error("ConvoLab tracking failed", error);
+      await chrome.storage.local.set({
+        [TRACKING_ERROR_KEY]: `Tracking paused: ${error.message}`,
+      });
+    });
 }
 
 async function stored(keys) {
@@ -63,24 +75,25 @@ async function fetchJSON(path, { token, method = "GET", body } = {}) {
 }
 
 async function candidateState(now) {
-  const idleState = await chrome.idle.queryState(60);
+  const idleState = await chrome.idle.queryState(REVIEW_IDLE_MS / 1_000);
   if (idleState !== "active") {
     return { state: null, idleExpired: true };
   }
 
   for (const state of tabStates.values()) {
     if (
-      !state.visible
-      || !isReviewURL(state.url)
-      || now - state.lastInteractionAt >= REVIEW_IDLE_MS
+      !isCandidatePageState(state, now)
     ) {
       continue;
     }
     try {
       const tab = await chrome.tabs.get(state.tabId);
       const window = await chrome.windows.get(tab.windowId);
-      if (tab.active && window.focused) {
+      if (isWaniKaniURL(tab.url) && tab.active && window.focused) {
         return { state, idleExpired: false };
+      }
+      if (!isWaniKaniURL(tab.url)) {
+        tabStates.delete(state.tabId);
       }
     } catch {
       tabStates.delete(state.tabId);
@@ -95,7 +108,7 @@ function validPageState(tab, state) {
     && isWaniKaniURL(tab.url)
     && isWaniKaniURL(state?.url)
     && typeof state.visible === "boolean"
-    && Number.isFinite(state.lastInteractionAt)
+    && (state.lastInteractionAt === null || Number.isFinite(state.lastInteractionAt))
   );
 }
 
@@ -116,7 +129,9 @@ async function restoreTabStates() {
           tabId: tab.id,
           url: state.url,
           visible: state.visible,
-          lastInteractionAt: Math.min(Date.now(), state.lastInteractionAt),
+          lastInteractionAt: Number.isFinite(state.lastInteractionAt)
+            ? Math.min(Date.now(), state.lastInteractionAt)
+            : null,
         });
       }
     } catch {
@@ -295,6 +310,7 @@ async function status() {
     ACTIVE_KEY,
     QUEUE_KEY,
     ERROR_KEY,
+    TRACKING_ERROR_KEY,
   ]);
   const userId = values[USER_KEY]?.id;
   const queues = values[QUEUE_KEY] || {};
@@ -303,7 +319,7 @@ async function status() {
     user: values[USER_KEY] || null,
     tracking: Boolean(values[ACTIVE_KEY]),
     pendingCount: userId ? (queues[String(userId)] || []).length : 0,
-    error: values[ERROR_KEY] || null,
+    error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
   };
 }
 
@@ -320,9 +336,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       tabId: sender.tab.id,
       url: message.url,
       visible: message.visible,
-      lastInteractionAt: Math.min(Date.now(), message.lastInteractionAt),
+      lastInteractionAt: Number.isFinite(message.lastInteractionAt)
+        ? Math.min(Date.now(), message.lastInteractionAt)
+        : null,
     });
-    serialize(() => reconcile()).catch(() => {});
+    runTracking(() => reconcile());
     return false;
   }
 
@@ -353,31 +371,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.tabs.onActivated.addListener(() => serialize(() => reconcile()));
+chrome.runtime.onConnect.addListener((port) => {
+  if (
+    port.name !== "wanikani-page-lifecycle"
+    || port.sender?.id !== chrome.runtime.id
+    || !port.sender.tab?.id
+    || !isWaniKaniURL(port.sender.tab.url)
+  ) {
+    port.disconnect();
+    return;
+  }
+  const tabId = port.sender.tab.id;
+  port.onDisconnect.addListener(() => {
+    tabStates.delete(tabId);
+    runTracking(() => reconcile());
+  });
+});
+
+chrome.tabs.onActivated.addListener(() => runTracking(() => reconcile()));
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabStates.delete(tabId);
-  serialize(() => reconcile());
+  runTracking(() => reconcile());
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url && !isWaniKaniURL(changeInfo.url)) {
     tabStates.delete(tabId);
   }
-  serialize(() => reconcile());
+  runTracking(() => reconcile());
 });
-chrome.windows.onFocusChanged.addListener(() => serialize(() => reconcile()));
-chrome.idle.onStateChanged.addListener(() => serialize(() => reconcile()));
+chrome.windows.onFocusChanged.addListener(() => runTracking(() => reconcile()));
+chrome.idle.onStateChanged.addListener(() => runTracking(() => reconcile()));
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
-    serialize(async () => {
+    runTracking(async () => {
       await reconcile();
       await flushPending();
     });
   }
 });
-chrome.runtime.onInstalled.addListener(() => serialize(() => reconcile()));
+chrome.runtime.onInstalled.addListener(() => runTracking(() => reconcile()));
 
 async function initialize() {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  await chrome.idle.setDetectionInterval(REVIEW_IDLE_MS / 1_000);
   const browserSession = await chrome.storage.session.get(BROWSER_SESSION_KEY);
   if (!browserSession[BROWSER_SESSION_KEY]) {
     await finishSession({ idleExpired: true });
@@ -389,4 +425,4 @@ async function initialize() {
   await flushPending();
 }
 
-serialize(initialize).catch(() => {});
+runTracking(initialize);

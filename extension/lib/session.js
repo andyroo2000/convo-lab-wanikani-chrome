@@ -39,6 +39,16 @@ export function trackingTransition({ activeTabId, candidateTabId }) {
   return activeTabId === candidateTabId ? "continue" : "switch";
 }
 
+export function isCandidatePageState(state, now) {
+  return Boolean(
+    state
+    && state.visible
+    && isReviewURL(state.url)
+    && Number.isFinite(state.lastInteractionAt)
+    && now - state.lastInteractionAt < REVIEW_IDLE_MS,
+  );
+}
+
 export function sessionEndTime({
   startedAt,
   now,
