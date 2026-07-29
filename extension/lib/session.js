@@ -76,6 +76,19 @@ export function normalizeQueueEntry(entry) {
     : { session: entry, attempts: 0 };
 }
 
+export function isPermanentUploadStatus(status) {
+  return (
+    Number.isInteger(status)
+    && status >= 400
+    && status < 500
+    && ![401, 408, 429].includes(status)
+  );
+}
+
+export function nextUploadBatch(queue, maximum = 50) {
+  return queue.slice(0, maximum).map(normalizeQueueEntry);
+}
+
 export function partitionQueueAfterResponse(
   queue,
   savedIDs,

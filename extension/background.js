@@ -2,7 +2,9 @@ import {
   REVIEW_IDLE_MS,
   appendBounded,
   isCandidatePageState,
+  isPermanentUploadStatus,
   isWaniKaniURL,
+  nextUploadBatch,
   normalizeQueueEntry,
   partitionQueueAfterResponse,
   savedSessionIDs,
@@ -261,6 +263,42 @@ async function reconcile(now = Date.now()) {
   await updateBadge(true);
 }
 
+async function uploadEntries(entries, token) {
+  try {
+    const saved = await fetchJSON("/api/study/activity-sessions/batch", {
+      token,
+      method: "POST",
+      body: { sessions: entries.map((entry) => entry.session) },
+    });
+    return partitionQueueAfterResponse(
+      entries,
+      savedSessionIDs(saved),
+      {
+        batchSize: entries.length,
+        maxAttempts: MAX_UPLOAD_ATTEMPTS,
+      },
+    );
+  } catch (error) {
+    if (!isPermanentUploadStatus(error.status)) {
+      throw error;
+    }
+    if (entries.length === 1) {
+      return partitionQueueAfterResponse(
+        entries,
+        new Set(),
+        { batchSize: 1, maxAttempts: MAX_UPLOAD_ATTEMPTS },
+      );
+    }
+    const midpoint = Math.ceil(entries.length / 2);
+    const left = await uploadEntries(entries.slice(0, midpoint), token);
+    const right = await uploadEntries(entries.slice(midpoint), token);
+    return {
+      remaining: [...left.remaining, ...right.remaining],
+      failed: [...left.failed, ...right.failed],
+    };
+  }
+}
+
 async function flushPending() {
   const values = await stored([
     TOKEN_KEY,
@@ -280,24 +318,13 @@ async function flushPending() {
   }
 
   try {
-    const batchSize = queue.some((entry) => entry.attempts > 0) ? 1 : 50;
-    const batch = queue.slice(0, batchSize);
-    const saved = await fetchJSON("/api/study/activity-sessions/batch", {
-      token,
-      method: "POST",
-      body: { sessions: batch.map((entry) => entry.session) },
-    });
-    const savedIDs = savedSessionIDs(saved);
-    const partition = partitionQueueAfterResponse(
-      queue,
-      savedIDs,
-      { batchSize, maxAttempts: MAX_UPLOAD_ATTEMPTS },
-    );
-    queues[userKey] = partition.remaining;
+    const batch = nextUploadBatch(queue);
+    const result = await uploadEntries(batch, token);
+    queues[userKey] = [...result.remaining, ...queue.slice(batch.length)];
     const failedQueues = values[DEAD_LETTER_KEY] || {};
     failedQueues[userKey] = appendFailedEntries(
       failedQueues[userKey] || [],
-      partition.failed,
+      result.failed,
       "Server did not accept the session",
     );
     await chrome.storage.local.set({
@@ -308,36 +335,6 @@ async function flushPending() {
   } catch (error) {
     if (error.status === 401) {
       await chrome.storage.local.remove(TOKEN_KEY);
-    }
-    const isPermanent = (
-      error.status >= 400
-      && error.status < 500
-      && ![401, 408, 429].includes(error.status)
-    );
-    if (isPermanent) {
-      const batchSize = queue.some((entry) => entry.attempts > 0) ? 1 : 50;
-      const isolatingBatch = queue.slice(0, batchSize);
-      const partition = partitionQueueAfterResponse(
-        queue,
-        new Set(),
-        {
-          batchSize,
-          maxAttempts: isolatingBatch.length > 1
-            ? Number.POSITIVE_INFINITY
-            : MAX_UPLOAD_ATTEMPTS,
-        },
-      );
-      queues[userKey] = partition.remaining;
-      const failedQueues = values[DEAD_LETTER_KEY] || {};
-      failedQueues[userKey] = appendFailedEntries(
-        failedQueues[userKey] || [],
-        partition.failed,
-        error.message,
-      );
-      await chrome.storage.local.set({
-        [QUEUE_KEY]: queues,
-        [DEAD_LETTER_KEY]: failedQueues,
-      });
     }
     await chrome.storage.local.set({
       [ERROR_KEY]: error.status === 401

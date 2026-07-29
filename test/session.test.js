@@ -5,9 +5,11 @@ import {
   REVIEW_IDLE_MS,
   appendBounded,
   isCandidatePageState,
+  isPermanentUploadStatus,
   isReviewURL,
   isWaniKaniURL,
   normalizeQueueEntry,
+  nextUploadBatch,
   partitionQueueAfterResponse,
   savedSessionIDs,
   sessionEndTime,
@@ -151,6 +153,24 @@ test("failed batches can be isolated without discarding valid neighbors", () => 
     goodSaved.remaining.map((entry) => entry.session.clientSessionId),
     ["poison"],
   );
+});
+
+test("upload classification retries transient statuses and isolates permanent ones", () => {
+  assert.equal(isPermanentUploadStatus(422), true);
+  assert.equal(isPermanentUploadStatus(400), true);
+  assert.equal(isPermanentUploadStatus(401), false);
+  assert.equal(isPermanentUploadStatus(408), false);
+  assert.equal(isPermanentUploadStatus(429), false);
+  assert.equal(isPermanentUploadStatus(500), false);
+});
+
+test("next upload batch does not collapse because an entry was retried", () => {
+  const queue = Array.from({ length: 60 }, (_, index) => ({
+    session: { clientSessionId: `session-${index}` },
+    attempts: index === 20 ? 1 : 0,
+  }));
+  assert.equal(nextUploadBatch(queue).length, 50);
+  assert.equal(nextUploadBatch(queue)[20].attempts, 1);
 });
 
 test("bounded queues discard only the oldest overflow", () => {
