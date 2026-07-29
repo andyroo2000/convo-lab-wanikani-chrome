@@ -181,7 +181,7 @@ async function startSession(state, now) {
   await updateBadge(true);
 }
 
-async function finishSession({ now = Date.now(), idleExpired = false } = {}) {
+async function finishSession({ now = Date.now() } = {}) {
   const values = await stored([ACTIVE_KEY, QUEUE_KEY, DEAD_LETTER_KEY]);
   const active = values[ACTIVE_KEY];
   if (!active) {
@@ -193,7 +193,6 @@ async function finishSession({ now = Date.now(), idleExpired = false } = {}) {
     startedAt: active.startedAt,
     now,
     lastInteractionAt: active.lastInteractionAt,
-    idleExpired,
   });
   const queues = values[QUEUE_KEY] || {};
   const failedQueues = values[DEAD_LETTER_KEY] || {};
@@ -239,9 +238,7 @@ async function reconcile(now = Date.now()) {
   }
   if (transition === "stop") {
     if (active) {
-      const idleExpired = candidate.idleExpired
-        || now - active.lastInteractionAt >= REVIEW_IDLE_MS;
-      await finishSession({ now, idleExpired });
+      await finishSession({ now });
       await flushPending();
     }
     return;
@@ -366,6 +363,7 @@ async function signIn(email, password) {
     [USER_KEY]: user.data,
     [ERROR_KEY]: null,
   });
+  await reconcile();
   await flushPending();
   return user.data;
 }
@@ -514,7 +512,7 @@ async function initialize() {
   await chrome.idle.setDetectionInterval(REVIEW_IDLE_MS / 1_000);
   const browserSession = await chrome.storage.session.get(BROWSER_SESSION_KEY);
   if (!browserSession[BROWSER_SESSION_KEY]) {
-    await finishSession({ idleExpired: true });
+    await finishSession();
     await chrome.storage.session.set({ [BROWSER_SESSION_KEY]: crypto.randomUUID() });
   }
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });

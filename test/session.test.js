@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MAX_SESSION_MS,
   REVIEW_IDLE_MS,
+  REVIEW_TAIL_GRACE_MS,
   appendBounded,
   isCandidatePageState,
   isPermanentUploadStatus,
@@ -90,7 +91,7 @@ test("credential operations only accept messages from this extension page", () =
   );
 });
 
-test("idle expiration ends at the last interaction", () => {
+test("idle expiration includes only a short post-interaction grace period", () => {
   const startedAt = 1_000;
   const lastInteractionAt = startedAt + 20_000;
   assert.equal(
@@ -98,9 +99,21 @@ test("idle expiration ends at the last interaction", () => {
       startedAt,
       now: lastInteractionAt + REVIEW_IDLE_MS,
       lastInteractionAt,
-      idleExpired: true,
     }),
-    lastInteractionAt,
+    lastInteractionAt + REVIEW_TAIL_GRACE_MS,
+  );
+});
+
+test("leaving just before idle timeout cannot add the whole idle tail", () => {
+  const startedAt = 1_000;
+  const lastInteractionAt = startedAt + 20_000;
+  assert.equal(
+    sessionEndTime({
+      startedAt,
+      now: lastInteractionAt + REVIEW_IDLE_MS - 10_000,
+      lastInteractionAt,
+    }),
+    lastInteractionAt + REVIEW_TAIL_GRACE_MS,
   );
 });
 
@@ -242,7 +255,6 @@ test("focused session ends now and is capped at one day", () => {
       startedAt: 1_000,
       now: 31_000,
       lastInteractionAt: 20_000,
-      idleExpired: false,
     }),
     31_000,
   );
@@ -250,8 +262,7 @@ test("focused session ends now and is capped at one day", () => {
     sessionEndTime({
       startedAt: 1_000,
       now: 1_000 + MAX_SESSION_MS + 60_000,
-      lastInteractionAt: 2_000,
-      idleExpired: false,
+      lastInteractionAt: 1_000 + MAX_SESSION_MS + 60_000,
     }),
     1_000 + MAX_SESSION_MS,
   );

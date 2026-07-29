@@ -1,4 +1,5 @@
 export const REVIEW_IDLE_MS = 5 * 60 * 1000;
+export const REVIEW_TAIL_GRACE_MS = 30 * 1000;
 export const MAX_SESSION_MS = 24 * 60 * 60 * 1000;
 
 export function isWaniKaniURL(value) {
@@ -69,11 +70,10 @@ export function sessionEndTime({
   startedAt,
   now,
   lastInteractionAt,
-  idleExpired,
 }) {
   const maximumEnd = startedAt + MAX_SESSION_MS;
-  const requestedEnd = idleExpired && lastInteractionAt
-    ? lastInteractionAt
+  const requestedEnd = lastInteractionAt
+    ? Math.min(now, lastInteractionAt + REVIEW_TAIL_GRACE_MS)
     : now;
   return Math.max(startedAt, Math.min(requestedEnd, now, maximumEnd));
 }
@@ -135,12 +135,10 @@ export function appendBounded(queue, value, maximum) {
 }
 
 export function studySessionPayload(active, endedAt) {
-  const boundedEnd = sessionEndTime({
-    startedAt: active.startedAt,
-    now: endedAt,
-    lastInteractionAt: active.lastInteractionAt,
-    idleExpired: false,
-  });
+  const boundedEnd = Math.max(
+    active.startedAt,
+    Math.min(endedAt, active.startedAt + MAX_SESSION_MS),
+  );
   return {
     clientSessionId: active.clientSessionId,
     category: "wanikani",
