@@ -10,6 +10,10 @@ body {
   width: 330px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 main {
   padding: 20px;
 }
@@ -101,11 +105,10 @@ button.secondary {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #9aa5af;
+  background: #2ca56c;
 }
 
 .dot.tracking {
-  background: #2ca56c;
   box-shadow: 0 0 0 4px rgb(44 165 108 / 16%);
 }
 
