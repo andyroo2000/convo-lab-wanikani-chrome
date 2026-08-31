@@ -39,10 +39,14 @@ function.
 
 ## Storage and retention
 
-The access token, basic account information, active-session state, and any
-sessions waiting to sync are stored in Chrome's local extension storage. The
-token and account information are removed when the user signs out. Chrome
-removes extension-local data when the extension is uninstalled.
+The access token, basic account information, active-session state, sessions
+waiting to sync, a bounded record of sessions that could not be synced, and the
+most recent synchronization or tracking error may be stored in Chrome's local
+extension storage. The token and basic account information are removed when the
+user signs out. Per-account queued session data remains locally so a valid
+pending session is not stranded by sign-out; successfully synchronized entries
+are removed from the queue. Failed entries and any remaining extension-local
+data are removed when the extension is uninstalled.
 
 Successfully synchronized study sessions are retained in the user's ConvoLab
 account. For privacy questions or requests concerning ConvoLab account data,
