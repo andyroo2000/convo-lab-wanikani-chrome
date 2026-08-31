@@ -28,6 +28,8 @@ restricted to trusted extension contexts, so supported-site content scripts
 cannot read it. Host-scoped content-script connections stop tracking after a
 tab navigates elsewhere without granting access to unrelated tab URLs.
 
+See the [privacy policy](PRIVACY.md) for the complete data-handling disclosure.
+
 ## Local development
 
 ```bash
