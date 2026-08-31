@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ConvoLab Study Tracker",
   "description": "Records active WaniKani review and Satori Reader time in ConvoLab.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minimum_chrome_version": "120",
   "permissions": [
     "alarms",
@@ -20,7 +20,17 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    },
     "default_popup": "popup.html",
     "default_title": "ConvoLab Study Tracker"
   },
