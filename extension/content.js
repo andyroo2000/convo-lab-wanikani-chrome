@@ -6,6 +6,16 @@
   let lastURL = window.location.href;
   let lifecyclePort;
 
+  function isSatoriReaderArticle() {
+    const url = new URL(window.location.href);
+    const host = url.hostname.toLowerCase();
+    return (
+      url.protocol === "https:"
+      && (host === "satorireader.com" || host === "www.satorireader.com")
+      && url.pathname.toLowerCase().startsWith("/articles/")
+    );
+  }
+
   function pageState(kind) {
     return {
       kind,
@@ -17,7 +27,7 @@
 
   function sendState(kind) {
     chrome.runtime.sendMessage({
-      type: "WANIKANI_PAGE_STATE",
+      type: "TRACKED_PAGE_STATE",
       ...pageState(kind),
     }).catch(() => {
       // The service worker may be restarting. The next heartbeat retries.
@@ -25,14 +35,15 @@
   }
 
   function connectLifecyclePort() {
-    lifecyclePort = chrome.runtime.connect({ name: "wanikani-page-lifecycle" });
+    lifecyclePort = chrome.runtime.connect({ name: "tracked-page-lifecycle" });
     lifecyclePort.onDisconnect.addListener(() => {
       lifecyclePort = null;
     });
   }
 
   function noteActivity(event) {
-    if (!event.isTrusted) {
+    const isIgnoredWheel = event.type === "wheel" && !isSatoriReaderArticle();
+    if (!event.isTrusted || isIgnoredWheel) {
       return;
     }
     const now = Date.now();
@@ -48,12 +59,19 @@
     capture: true,
     passive: true,
   });
+  document.addEventListener("wheel", noteActivity, {
+    capture: true,
+    passive: true,
+  });
   document.addEventListener("keydown", noteActivity, { capture: true });
   document.addEventListener("visibilitychange", () => sendState("visibility"));
   window.addEventListener("pageshow", () => sendState("pageshow"));
   window.addEventListener("pagehide", () => sendState("pagehide"));
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "REQUEST_WANIKANI_STATE") {
+    if (
+      message?.type !== "REQUEST_TRACKED_PAGE_STATE"
+      && message?.type !== "REQUEST_WANIKANI_STATE"
+    ) {
       return false;
     }
     sendResponse(pageState("requested"));

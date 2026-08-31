@@ -40,8 +40,8 @@ function render(status) {
   }
   trackingDot.classList.toggle("tracking", status.tracking);
   trackingLabel.textContent = status.tracking
-    ? "Recording review time"
-    : "Ready for reviews";
+    ? `Recording ${status.trackingLabel || "study time"}`
+    : "Ready to track study time";
   accountLabel.textContent = status.user?.email || "Signed in to ConvoLab";
   pendingLabel.textContent = status.pendingCount
     ? `${status.pendingCount} completed session${status.pendingCount === 1 ? "" : "s"} waiting to sync.`
