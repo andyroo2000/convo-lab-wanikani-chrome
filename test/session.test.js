@@ -22,6 +22,7 @@ import {
   sessionEndTime,
   sessionStartTime,
   shouldForgetTabStateAfterDisconnect,
+  studyActivityForTrackingType,
   studyActivityForURL,
   studySessionPayload,
   trackingTransition,
@@ -78,6 +79,21 @@ test("rejects insecure and lookalike Satori Reader hosts", () => {
   assert.equal(
     isSatoriReaderURL("https://web.cdn.satorireader.com/articles/story"),
     false,
+  );
+});
+
+test("only a missing legacy tracking type falls back to WaniKani", () => {
+  assert.equal(
+    studyActivityForTrackingType(undefined).trackingType,
+    "wanikani",
+  );
+  assert.equal(
+    studyActivityForTrackingType(null).trackingType,
+    "wanikani",
+  );
+  assert.throws(
+    () => studyActivityForTrackingType("bogus"),
+    /Unsupported study tracking type: bogus/,
   );
 });
 

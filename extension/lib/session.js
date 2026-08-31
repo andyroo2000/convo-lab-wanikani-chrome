@@ -74,7 +74,14 @@ export function studyActivityForURL(value) {
 }
 
 export function studyActivityForTrackingType(value) {
-  return STUDY_ACTIVITIES[value] || STUDY_ACTIVITIES.wanikani;
+  if (value == null) {
+    return STUDY_ACTIVITIES.wanikani;
+  }
+  const activity = STUDY_ACTIVITIES[value];
+  if (!activity) {
+    throw new Error(`Unsupported study tracking type: ${value}`);
+  }
+  return activity;
 }
 
 export function isTrackedStudyURL(value) {

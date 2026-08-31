@@ -50,5 +50,6 @@ test("reader scrolling counts as trusted study interaction", () => {
     contentScript,
     /addEventListener\("wheel", noteActivity,[\s\S]*?passive:\s*true/,
   );
-  assert.match(contentScript, /if \(!event\.isTrusted\)/);
+  assert.match(contentScript, /event\.type === "wheel" && !isSatoriReaderArticle\(\)/);
+  assert.match(contentScript, /if \(!event\.isTrusted \|\| isIgnoredWheel\)/);
 });

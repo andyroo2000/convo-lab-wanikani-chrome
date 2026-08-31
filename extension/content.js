@@ -6,6 +6,16 @@
   let lastURL = window.location.href;
   let lifecyclePort;
 
+  function isSatoriReaderArticle() {
+    const url = new URL(window.location.href);
+    const host = url.hostname.toLowerCase();
+    return (
+      url.protocol === "https:"
+      && (host === "satorireader.com" || host === "www.satorireader.com")
+      && url.pathname.toLowerCase().startsWith("/articles/")
+    );
+  }
+
   function pageState(kind) {
     return {
       kind,
@@ -32,7 +42,8 @@
   }
 
   function noteActivity(event) {
-    if (!event.isTrusted) {
+    const isIgnoredWheel = event.type === "wheel" && !isSatoriReaderArticle();
+    if (!event.isTrusted || isIgnoredWheel) {
       return;
     }
     const now = Date.now();
