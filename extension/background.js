@@ -4,10 +4,10 @@ import {
   appendFailedEntries,
   isCandidatePageState,
   isPermanentUploadStatus,
-  isReviewURL,
+  isSupportedStudyHostURL,
+  isTrackedStudyURL,
   isTrustedExtensionPageSender,
   isValidPageState,
-  isWaniKaniURL,
   nextUploadBatch,
   normalizeQueueEntry,
   partitionQueueAfterResponse,
@@ -15,6 +15,8 @@ import {
   sessionEndTime,
   sessionStartTime,
   shouldForgetTabStateAfterDisconnect,
+  studyActivityForTrackingType,
+  studyActivityForURL,
   studySessionPayload,
   trackingTransition,
 } from "./lib/session.js";
@@ -22,6 +24,8 @@ import {
 const API_BASE_URL = "https://convo-lab.com";
 const TOKEN_KEY = "convoLabAccessToken";
 const USER_KEY = "convoLabUser";
+// Retain the original storage keys so an extension upgrade cannot strand an
+// active WaniKani session or any retry-safe queued uploads.
 const ACTIVE_KEY = "activeWaniKaniSession";
 const QUEUE_KEY = "pendingWaniKaniSessionsByUser";
 const DEAD_LETTER_KEY = "failedWaniKaniSessionsByUser";
@@ -58,13 +62,16 @@ async function stored(keys) {
   return chrome.storage.local.get(keys);
 }
 
-async function updateBadge(tracking) {
+async function updateBadge(active) {
+  const activity = active
+    ? studyActivityForTrackingType(active.trackingType)
+    : null;
   await chrome.action.setBadgeBackgroundColor({ color: "#143A66" });
-  await chrome.action.setBadgeText({ text: tracking ? "●" : "" });
+  await chrome.action.setBadgeText({ text: active ? "●" : "" });
   await chrome.action.setTitle({
-    title: tracking
-      ? "ConvoLab is recording WaniKani review time"
-      : "ConvoLab WaniKani Tracker",
+    title: activity
+      ? `ConvoLab is recording ${activity.recordingLabel}`
+      : "ConvoLab Study Tracker",
   });
 }
 
@@ -104,10 +111,19 @@ async function candidateState(now) {
     try {
       const tab = await chrome.tabs.get(state.tabId);
       const browserWindow = await chrome.windows.get(tab.windowId);
-      if (isReviewURL(tab.url) && tab.active && browserWindow.focused) {
-        return { state };
+      const activity = studyActivityForURL(tab.url);
+      const stateActivity = studyActivityForURL(state.url);
+      if (
+        activity
+        && activity.trackingType === stateActivity?.trackingType
+        && tab.active
+        && browserWindow.focused
+      ) {
+        return {
+          state: { ...state, trackingType: activity.trackingType },
+        };
       }
-      if (!isReviewURL(tab.url)) {
+      if (!activity || activity.trackingType !== stateActivity?.trackingType) {
         tabStates.delete(state.tabId);
       }
     } catch {
@@ -122,17 +138,31 @@ async function restoreTabStates() {
     url: [
       "https://wanikani.com/*",
       "https://*.wanikani.com/*",
+      "https://satorireader.com/*",
+      "https://www.satorireader.com/*",
     ],
   });
   await Promise.all(tabs.map(async (tab) => {
     try {
-      const state = await chrome.tabs.sendMessage(tab.id, {
-        type: "REQUEST_WANIKANI_STATE",
-      });
+      let state = null;
+      try {
+        state = await chrome.tabs.sendMessage(tab.id, {
+          type: "REQUEST_TRACKED_PAGE_STATE",
+        });
+      } catch {
+        // An open tab may still be running the previous content-script version.
+      }
+      if (!state && studyActivityForURL(tab.url)?.trackingType === "wanikani") {
+        state = await chrome.tabs.sendMessage(tab.id, {
+          type: "REQUEST_WANIKANI_STATE",
+        });
+      }
       if (isValidPageState(tab, state)) {
+        const activity = studyActivityForURL(state.url);
         tabStates.set(tab.id, {
           tabId: tab.id,
           url: state.url,
+          trackingType: activity.trackingType,
           visible: state.visible,
           lastInteractionAt: Number.isFinite(state.lastInteractionAt)
             ? Math.min(Date.now(), state.lastInteractionAt)
@@ -155,11 +185,12 @@ async function startSession(state, now) {
     clientSessionId: crypto.randomUUID(),
     userId: String(values[USER_KEY].id),
     tabId: state.tabId,
+    trackingType: state.trackingType,
     startedAt,
     lastInteractionAt: Math.max(startedAt, state.lastInteractionAt || startedAt),
   };
   await chrome.storage.local.set({ [ACTIVE_KEY]: active });
-  await updateBadge(true);
+  await updateBadge(active);
 }
 
 async function finishSession({ now = Date.now() } = {}) {
@@ -171,7 +202,7 @@ async function finishSession({ now = Date.now() } = {}) {
   ]);
   const active = values[ACTIVE_KEY];
   if (!active) {
-    await updateBadge(false);
+    await updateBadge(null);
     return;
   }
 
@@ -207,7 +238,7 @@ async function finishSession({ now = Date.now() } = {}) {
     [FAILED_OVERFLOW_KEY]: failedOverflow,
   });
   await chrome.storage.local.remove(ACTIVE_KEY);
-  await updateBadge(false);
+  await updateBadge(null);
 }
 
 async function reconcile(now = Date.now()) {
@@ -223,6 +254,10 @@ async function reconcile(now = Date.now()) {
   const transition = trackingTransition({
     activeTabId: active?.tabId ?? null,
     candidateTabId: candidate.state?.tabId ?? null,
+    activeTrackingType: active
+      ? studyActivityForTrackingType(active.trackingType).trackingType
+      : null,
+    candidateTrackingType: candidate.state?.trackingType ?? null,
   });
 
   if (transition === "none") {
@@ -252,7 +287,7 @@ async function reconcile(now = Date.now()) {
     active.lastInteractionAt = candidate.state.lastInteractionAt;
     await chrome.storage.local.set({ [ACTIVE_KEY]: active });
   }
-  await updateBadge(true);
+  await updateBadge(active);
 }
 
 async function uploadEntries(entries, token) {
@@ -349,7 +384,7 @@ async function signIn(email, password) {
     body: {
       email,
       password,
-      device_name: "ConvoLab WaniKani Chrome Extension",
+      device_name: "ConvoLab Study Tracker Chrome Extension",
     },
   });
   const token = response?.data?.token;
@@ -396,10 +431,14 @@ async function status() {
   const failedQueues = values[DEAD_LETTER_KEY] || {};
   const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
   const userKey = userId ? String(userId) : null;
+  const active = values[ACTIVE_KEY];
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
     user: values[USER_KEY] || null,
-    tracking: Boolean(values[ACTIVE_KEY]),
+    tracking: Boolean(active),
+    trackingLabel: active
+      ? studyActivityForTrackingType(active.trackingType).recordingLabel
+      : null,
     pendingCount: userKey ? (queues[userKey] || []).length : 0,
     failedCount: userKey
       ? (failedQueues[userKey] || []).length + (failedOverflow[userKey] || 0)
@@ -413,13 +452,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === "WANIKANI_PAGE_STATE") {
+  if (
+    message.type === "TRACKED_PAGE_STATE"
+    || message.type === "WANIKANI_PAGE_STATE"
+  ) {
     if (!isValidPageState(sender.tab, message)) {
       return false;
     }
+    const activity = studyActivityForURL(message.url);
     tabStates.set(sender.tab.id, {
       tabId: sender.tab.id,
       url: message.url,
+      trackingType: activity.trackingType,
       visible: message.visible,
       lastInteractionAt: Number.isFinite(message.lastInteractionAt)
         ? Math.min(Date.now(), message.lastInteractionAt)
@@ -462,10 +506,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (
-    port.name !== "wanikani-page-lifecycle"
+    !["tracked-page-lifecycle", "wanikani-page-lifecycle"].includes(port.name)
     || port.sender?.id !== chrome.runtime.id
     || !port.sender.tab?.id
-    || !isWaniKaniURL(port.sender.tab.url)
+    || !isSupportedStudyHostURL(port.sender.tab.url)
   ) {
     port.disconnect();
     return;
@@ -494,7 +538,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   runTracking(() => reconcile());
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url && !isWaniKaniURL(changeInfo.url)) {
+  if (changeInfo.url && !isTrackedStudyURL(changeInfo.url)) {
     tabStates.delete(tabId);
   }
   runTracking(() => reconcile());

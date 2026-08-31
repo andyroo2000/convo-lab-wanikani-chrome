@@ -9,6 +9,9 @@ import {
   isCandidatePageState,
   isPermanentUploadStatus,
   isReviewURL,
+  isSatoriReaderArticleURL,
+  isSatoriReaderURL,
+  isTrackedStudyURL,
   isTrustedExtensionPageSender,
   isValidPageState,
   isWaniKaniURL,
@@ -19,6 +22,7 @@ import {
   sessionEndTime,
   sessionStartTime,
   shouldForgetTabStateAfterDisconnect,
+  studyActivityForURL,
   studySessionPayload,
   trackingTransition,
 } from "../extension/lib/session.js";
@@ -38,6 +42,45 @@ test("rejects insecure and lookalike WaniKani hosts", () => {
   assert.equal(isWaniKaniURL("https://account.wanikani.com/login"), true);
 });
 
+test("recognizes Satori Reader articles without tracking its catalog", () => {
+  assert.equal(
+    isSatoriReaderArticleURL(
+      "https://www.satorireader.com/articles/jam-maker-episode-1-edition-m",
+    ),
+    true,
+  );
+  assert.equal(isSatoriReaderArticleURL("https://www.satorireader.com/articles"), false);
+  assert.equal(isSatoriReaderArticleURL("https://www.satorireader.com/stories"), false);
+  assert.equal(isTrackedStudyURL("https://www.satorireader.com/dashboard"), false);
+  assert.deepEqual(
+    studyActivityForURL(
+      "https://www.satorireader.com/articles/jam-maker-episode-1-edition-m",
+    ),
+    {
+      trackingType: "satori_reader",
+      category: "immerse",
+      activity: "reading",
+      name: "Satori Reader",
+      recordingLabel: "Satori Reader time",
+    },
+  );
+});
+
+test("rejects insecure and lookalike Satori Reader hosts", () => {
+  assert.equal(
+    isSatoriReaderURL("http://www.satorireader.com/articles/story"),
+    false,
+  );
+  assert.equal(
+    isSatoriReaderURL("https://satorireader.com.example.com/articles/story"),
+    false,
+  );
+  assert.equal(
+    isSatoriReaderURL("https://web.cdn.satorireader.com/articles/story"),
+    false,
+  );
+});
+
 test("port disconnect only forgets tabs that closed or left WaniKani", () => {
   assert.equal(
     shouldForgetTabStateAfterDisconnect({
@@ -48,6 +91,12 @@ test("port disconnect only forgets tabs that closed or left WaniKani", () => {
   assert.equal(
     shouldForgetTabStateAfterDisconnect({
       url: "https://www.wanikani.com/dashboard",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldForgetTabStateAfterDisconnect({
+      url: "https://www.satorireader.com/stories",
     }),
     false,
   );
@@ -121,6 +170,28 @@ test("page-state claims require matching trusted WaniKani contexts", () => {
   );
 });
 
+test("page-state claims accept matching Satori Reader article contexts", () => {
+  const url = "https://www.satorireader.com/articles/story-episode-1";
+  assert.equal(
+    isValidPageState(
+      { id: 9, url },
+      { url, visible: true, lastInteractionAt: 1_000 },
+    ),
+    true,
+  );
+  assert.equal(
+    isValidPageState(
+      { id: 9, url },
+      {
+        url: "https://www.wanikani.com/subjects/review",
+        visible: true,
+        lastInteractionAt: 1_000,
+      },
+    ),
+    false,
+  );
+});
+
 test("idle expiration includes only a short post-interaction grace period", () => {
   const startedAt = 1_000;
   const lastInteractionAt = startedAt + 20_000;
@@ -180,6 +251,18 @@ test("candidate state requires a real, recent interaction", () => {
   );
 });
 
+test("Satori Reader articles use the same focus-safe interaction window", () => {
+  const now = 500_000;
+  assert.equal(
+    isCandidatePageState({
+      visible: true,
+      url: "https://www.satorireader.com/articles/story-episode-1",
+      lastInteractionAt: now - REVIEW_IDLE_MS + 1,
+    }, now),
+    true,
+  );
+});
+
 test("tracking transitions distinguish start, stop, continue, and tab switch", () => {
   assert.equal(
     trackingTransition({ activeTabId: null, candidateTabId: null }),
@@ -199,6 +282,15 @@ test("tracking transitions distinguish start, stop, continue, and tab switch", (
   );
   assert.equal(
     trackingTransition({ activeTabId: 4, candidateTabId: 8 }),
+    "switch",
+  );
+  assert.equal(
+    trackingTransition({
+      activeTabId: 4,
+      candidateTabId: 4,
+      activeTrackingType: "wanikani",
+      candidateTrackingType: "satori_reader",
+    }),
     "switch",
   );
 });
@@ -333,6 +425,28 @@ test("builds retry-safe ConvoLab activity payload", () => {
     name: "WaniKani Reviews",
     startedAt: "2026-07-29T12:00:00.000Z",
     endedAt: "2026-07-29T12:10:00.000Z",
+    durationMs: 600_000,
+  });
+});
+
+test("builds a separate Satori Reader immersion payload", () => {
+  const payload = studySessionPayload(
+    {
+      clientSessionId: "22ce3522-e31d-4c64-98b3-793a1ac83484",
+      trackingType: "satori_reader",
+      startedAt: Date.parse("2026-08-31T12:00:00.000Z"),
+      lastInteractionAt: Date.parse("2026-08-31T12:05:00.000Z"),
+    },
+    Date.parse("2026-08-31T12:10:00.000Z"),
+  );
+  assert.deepEqual(payload, {
+    clientSessionId: "22ce3522-e31d-4c64-98b3-793a1ac83484",
+    category: "immerse",
+    activity: "reading",
+    source: "automatic",
+    name: "Satori Reader",
+    startedAt: "2026-08-31T12:00:00.000Z",
+    endedAt: "2026-08-31T12:10:00.000Z",
     durationMs: 600_000,
   });
 });

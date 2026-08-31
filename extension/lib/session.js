@@ -2,6 +2,23 @@ export const REVIEW_IDLE_MS = 5 * 60 * 1000;
 export const REVIEW_TAIL_GRACE_MS = 30 * 1000;
 export const MAX_SESSION_MS = 24 * 60 * 60 * 1000;
 
+const STUDY_ACTIVITIES = Object.freeze({
+  wanikani: Object.freeze({
+    trackingType: "wanikani",
+    category: "wanikani",
+    activity: "wanikani_review",
+    name: "WaniKani Reviews",
+    recordingLabel: "WaniKani review time",
+  }),
+  satori_reader: Object.freeze({
+    trackingType: "satori_reader",
+    category: "immerse",
+    activity: "reading",
+    name: "Satori Reader",
+    recordingLabel: "Satori Reader time",
+  }),
+});
+
 export function isWaniKaniURL(value) {
   try {
     const url = value instanceof URL ? value : new URL(value);
@@ -23,8 +40,53 @@ export function isReviewURL(value) {
   return path === "/subjects/review" || path.startsWith("/subjects/review/");
 }
 
+export function isSatoriReaderURL(value) {
+  try {
+    const url = value instanceof URL ? value : new URL(value);
+    const host = url.hostname.toLowerCase();
+    return (
+      url.protocol.toLowerCase() === "https:"
+      && (host === "satorireader.com" || host === "www.satorireader.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isSatoriReaderArticleURL(value) {
+  if (!isSatoriReaderURL(value)) {
+    return false;
+  }
+  const segments = new URL(value).pathname
+    .split("/")
+    .filter(Boolean);
+  return segments.length >= 2 && segments[0].toLowerCase() === "articles";
+}
+
+export function studyActivityForURL(value) {
+  if (isReviewURL(value)) {
+    return STUDY_ACTIVITIES.wanikani;
+  }
+  if (isSatoriReaderArticleURL(value)) {
+    return STUDY_ACTIVITIES.satori_reader;
+  }
+  return null;
+}
+
+export function studyActivityForTrackingType(value) {
+  return STUDY_ACTIVITIES[value] || STUDY_ACTIVITIES.wanikani;
+}
+
+export function isTrackedStudyURL(value) {
+  return studyActivityForURL(value) !== null;
+}
+
+export function isSupportedStudyHostURL(value) {
+  return isWaniKaniURL(value) || isSatoriReaderURL(value);
+}
+
 export function shouldForgetTabStateAfterDisconnect(tab) {
-  return !tab || !isWaniKaniURL(tab.url);
+  return !tab || !isSupportedStudyHostURL(tab.url);
 }
 
 export function isTrustedExtensionPageSender(sender, runtimeId) {
@@ -40,10 +102,13 @@ export function isTrustedExtensionPageSender(sender, runtimeId) {
 }
 
 export function isValidPageState(tab, state) {
+  const tabActivity = studyActivityForURL(tab?.url);
+  const stateActivity = studyActivityForURL(state?.url);
   return Boolean(
     tab?.id
-    && isWaniKaniURL(tab.url)
-    && isWaniKaniURL(state?.url)
+    && tabActivity
+    && stateActivity
+    && tabActivity.trackingType === stateActivity.trackingType
     && typeof state.visible === "boolean"
     && (state.lastInteractionAt === null || Number.isFinite(state.lastInteractionAt)),
   );
@@ -53,7 +118,12 @@ export function sessionStartTime(now) {
   return now;
 }
 
-export function trackingTransition({ activeTabId, candidateTabId }) {
+export function trackingTransition({
+  activeTabId,
+  candidateTabId,
+  activeTrackingType,
+  candidateTrackingType,
+}) {
   if (activeTabId == null && candidateTabId == null) {
     return "none";
   }
@@ -63,14 +133,17 @@ export function trackingTransition({ activeTabId, candidateTabId }) {
   if (candidateTabId == null) {
     return "stop";
   }
-  return activeTabId === candidateTabId ? "continue" : "switch";
+  return (
+    activeTabId === candidateTabId
+    && activeTrackingType === candidateTrackingType
+  ) ? "continue" : "switch";
 }
 
 export function isCandidatePageState(state, now) {
   return Boolean(
     state
     && state.visible
-    && isReviewURL(state.url)
+    && isTrackedStudyURL(state.url)
     && Number.isFinite(state.lastInteractionAt)
     && now - state.lastInteractionAt < REVIEW_IDLE_MS,
   );
@@ -166,16 +239,17 @@ export function appendFailedEntries(
 }
 
 export function studySessionPayload(active, endedAt) {
+  const activity = studyActivityForTrackingType(active.trackingType);
   const boundedEnd = Math.max(
     active.startedAt,
     Math.min(endedAt, active.startedAt + MAX_SESSION_MS),
   );
   return {
     clientSessionId: active.clientSessionId,
-    category: "wanikani",
-    activity: "wanikani_review",
+    category: activity.category,
+    activity: activity.activity,
     source: "automatic",
-    name: "WaniKani Reviews",
+    name: activity.name,
     startedAt: new Date(active.startedAt).toISOString(),
     endedAt: new Date(boundedEnd).toISOString(),
     durationMs: boundedEnd - active.startedAt,
