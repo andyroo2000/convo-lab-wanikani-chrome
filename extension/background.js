@@ -78,22 +78,30 @@ async function updateBadge(active) {
 async function fetchJSON(path, { token, method = "GET", body } = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
-    headers: {
-      Accept: "application/json",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: requestHeaders(token, body),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  const payload = response.status === 204
-    ? null
-    : await response.json().catch(() => null);
+  const payload = await responsePayload(response);
   if (!response.ok) {
     const error = new Error(payload?.message || `Request failed (${response.status})`);
     error.status = response.status;
     throw error;
   }
   return payload;
+}
+
+function requestHeaders(token, body) {
+  return {
+    Accept: "application/json",
+    ...(body ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function responsePayload(response) {
+  return response.status === 204
+    ? null
+    : response.json().catch(() => null);
 }
 
 async function candidateState(now) {
@@ -103,34 +111,49 @@ async function candidateState(now) {
   }
 
   for (const state of tabStates.values()) {
-    if (
-      !isCandidatePageState(state, now)
-    ) {
+    if (!isCandidatePageState(state, now)) {
       continue;
     }
-    try {
-      const tab = await chrome.tabs.get(state.tabId);
-      const browserWindow = await chrome.windows.get(tab.windowId);
-      const activity = studyActivityForURL(tab.url);
-      const stateActivity = studyActivityForURL(state.url);
-      if (
-        activity
-        && activity.trackingType === stateActivity?.trackingType
-        && tab.active
-        && browserWindow.focused
-      ) {
-        return {
-          state: { ...state, trackingType: activity.trackingType },
-        };
-      }
-      if (!activity || activity.trackingType !== stateActivity?.trackingType) {
-        tabStates.delete(state.tabId);
-      }
-    } catch {
+    const inspected = await inspectCandidateState(state);
+    if (inspected.candidate) {
+      return { state: inspected.candidate };
+    }
+    if (inspected.shouldForget) {
       tabStates.delete(state.tabId);
     }
   }
   return { state: null };
+}
+
+async function inspectCandidateState(state) {
+  try {
+    const tab = await chrome.tabs.get(state.tabId);
+    const browserWindow = await chrome.windows.get(tab.windowId);
+    const activity = studyActivityForURL(tab.url);
+    const stateActivity = studyActivityForURL(state.url);
+    const matchingActivity = hasMatchingActivity(activity, stateActivity);
+    if (matchingActivity && isFocusedTab(tab, browserWindow)) {
+      return {
+        candidate: { ...state, trackingType: activity.trackingType },
+        shouldForget: false,
+      };
+    }
+    return {
+      candidate: null,
+      shouldForget: !matchingActivity,
+    };
+  } catch {
+    return { candidate: null, shouldForget: true };
+  }
+}
+
+function hasMatchingActivity(activity, stateActivity) {
+  return Boolean(activity)
+    && activity.trackingType === stateActivity?.trackingType;
+}
+
+function isFocusedTab(tab, browserWindow) {
+  return tab.active && browserWindow.focused;
 }
 
 async function restoreTabStates() {
@@ -215,22 +238,13 @@ async function finishSession({ now = Date.now() } = {}) {
   const failedQueues = values[DEAD_LETTER_KEY] || {};
   const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
   if (endedAt - active.startedAt >= MIN_SESSION_MS) {
-    const userQueue = (queues[active.userId] || []).map(normalizeQueueEntry);
-    const appended = appendBounded(
-      userQueue,
-      { session: studySessionPayload(active, endedAt), attempts: 0 },
-      MAX_PENDING_SESSIONS,
-    );
-    queues[active.userId] = appended.items;
-    const failedResult = appendFailedEntries(
-      failedQueues[active.userId] || [],
-      failedOverflow[active.userId] || 0,
-      appended.dropped,
-      "Queue capacity exceeded",
-      MAX_FAILED_SESSIONS,
-    );
-    failedQueues[active.userId] = failedResult.items;
-    failedOverflow[active.userId] = failedResult.overflowCount;
+    queueCompletedSession({
+      active,
+      endedAt,
+      queues,
+      failedQueues,
+      failedOverflow,
+    });
   }
   await chrome.storage.local.set({
     [QUEUE_KEY]: queues,
@@ -241,50 +255,95 @@ async function finishSession({ now = Date.now() } = {}) {
   await updateBadge(null);
 }
 
+function queueCompletedSession({
+  active,
+  endedAt,
+  queues,
+  failedQueues,
+  failedOverflow,
+}) {
+  const userQueue = (queues[active.userId] || []).map(normalizeQueueEntry);
+  const appended = appendBounded(
+    userQueue,
+    { session: studySessionPayload(active, endedAt), attempts: 0 },
+    MAX_PENDING_SESSIONS,
+  );
+  queues[active.userId] = appended.items;
+  const failedResult = appendFailedEntries(
+    failedQueues[active.userId] || [],
+    failedOverflow[active.userId] || 0,
+    appended.dropped,
+    "Queue capacity exceeded",
+    MAX_FAILED_SESSIONS,
+  );
+  failedQueues[active.userId] = failedResult.items;
+  failedOverflow[active.userId] = failedResult.overflowCount;
+}
+
 async function reconcile(now = Date.now()) {
   const values = await stored([ACTIVE_KEY, TOKEN_KEY, USER_KEY]);
   const active = values[ACTIVE_KEY];
-  if (!values[TOKEN_KEY] || !values[USER_KEY]?.id) {
-    if (active) {
-      await finishSession({ now });
-    }
+  if (!hasSignedInUser(values)) {
+    await finishSignedOutSession(active, now);
     return;
   }
   const candidate = await candidateState(now);
-  const transition = trackingTransition({
+  const transition = resolvedTrackingTransition(active, candidate.state);
+
+  switch (transition) {
+    case "none":
+      return;
+    case "stop":
+      await stopSession(active, now);
+      return;
+    case "start":
+      await startSession(candidate.state, now);
+      return;
+    case "switch":
+      await switchSession(candidate.state, now);
+      return;
+    default:
+      await continueSession(active, candidate.state);
+  }
+}
+
+function hasSignedInUser(values) {
+  return Boolean(values[TOKEN_KEY] && values[USER_KEY]?.id);
+}
+
+async function finishSignedOutSession(active, now) {
+  if (active) {
+    await finishSession({ now });
+  }
+}
+
+function resolvedTrackingTransition(active, candidate) {
+  return trackingTransition({
     activeTabId: active?.tabId ?? null,
-    candidateTabId: candidate.state?.tabId ?? null,
+    candidateTabId: candidate?.tabId ?? null,
     activeTrackingType: active
       ? studyActivityForTrackingType(active.trackingType).trackingType
       : null,
-    candidateTrackingType: candidate.state?.trackingType ?? null,
+    candidateTrackingType: candidate?.trackingType ?? null,
   });
+}
 
-  if (transition === "none") {
-    return;
-  }
-  if (transition === "stop") {
-    if (active) {
-      await finishSession({ now });
-      await flushPending();
-    }
-    return;
-  }
-
-  if (transition === "start") {
-    await startSession(candidate.state, now);
-    return;
-  }
-
-  if (transition === "switch") {
+async function stopSession(active, now) {
+  if (active) {
     await finishSession({ now });
-    await startSession(candidate.state, now);
     await flushPending();
-    return;
   }
+}
 
-  if (candidate.state.lastInteractionAt > active.lastInteractionAt) {
-    active.lastInteractionAt = candidate.state.lastInteractionAt;
+async function switchSession(candidate, now) {
+  await finishSession({ now });
+  await startSession(candidate, now);
+  await flushPending();
+}
+
+async function continueSession(active, candidate) {
+  if (candidate.lastInteractionAt > active.lastInteractionAt) {
+    active.lastInteractionAt = candidate.lastInteractionAt;
     await chrome.storage.local.set({ [ACTIVE_KEY]: active });
   }
   await updateBadge(active);
@@ -334,48 +393,66 @@ async function flushPending() {
     DEAD_LETTER_KEY,
     FAILED_OVERFLOW_KEY,
   ]);
-  const token = values[TOKEN_KEY];
-  const userId = values[USER_KEY]?.id;
-  const queues = values[QUEUE_KEY] || {};
-  const userKey = userId ? String(userId) : null;
-  const queue = userKey
-    ? (queues[userKey] || []).map(normalizeQueueEntry)
-    : [];
-  if (!token || queue.length === 0) {
+  const pending = pendingUpload(values);
+  if (!pending) {
     return;
   }
 
   try {
-    const batch = nextUploadBatch(queue);
-    const result = await uploadEntries(batch, token);
-    queues[userKey] = [...result.remaining, ...queue.slice(batch.length)];
-    const failedQueues = values[DEAD_LETTER_KEY] || {};
-    const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
-    const failedResult = appendFailedEntries(
-      failedQueues[userKey] || [],
-      failedOverflow[userKey] || 0,
-      result.failed,
-      "Server did not accept the session",
-      MAX_FAILED_SESSIONS,
-    );
-    failedQueues[userKey] = failedResult.items;
-    failedOverflow[userKey] = failedResult.overflowCount;
-    await chrome.storage.local.set({
-      [QUEUE_KEY]: queues,
-      [DEAD_LETTER_KEY]: failedQueues,
-      [FAILED_OVERFLOW_KEY]: failedOverflow,
-      [ERROR_KEY]: null,
-    });
+    const batch = nextUploadBatch(pending.queue);
+    const result = await uploadEntries(batch, pending.token);
+    await saveUploadResult(values, pending, batch.length, result);
   } catch (error) {
-    if (error.status === 401) {
-      await chrome.storage.local.remove(TOKEN_KEY);
-    }
-    await chrome.storage.local.set({
-      [ERROR_KEY]: error.status === 401
-        ? "ConvoLab sign-in expired. Sign in again to sync."
-        : error.message,
-    });
+    await recordUploadError(error);
   }
+}
+
+function pendingUpload(values) {
+  const token = values[TOKEN_KEY];
+  const userId = values[USER_KEY]?.id;
+  const userKey = userId ? String(userId) : null;
+  const queues = values[QUEUE_KEY] || {};
+  const queue = userKey
+    ? (queues[userKey] || []).map(normalizeQueueEntry)
+    : [];
+  return token && queue.length > 0
+    ? { token, userKey, queue, queues }
+    : null;
+}
+
+async function saveUploadResult(values, pending, batchSize, result) {
+  pending.queues[pending.userKey] = [
+    ...result.remaining,
+    ...pending.queue.slice(batchSize),
+  ];
+  const failedQueues = values[DEAD_LETTER_KEY] || {};
+  const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
+  const failedResult = appendFailedEntries(
+    failedQueues[pending.userKey] || [],
+    failedOverflow[pending.userKey] || 0,
+    result.failed,
+    "Server did not accept the session",
+    MAX_FAILED_SESSIONS,
+  );
+  failedQueues[pending.userKey] = failedResult.items;
+  failedOverflow[pending.userKey] = failedResult.overflowCount;
+  await chrome.storage.local.set({
+    [QUEUE_KEY]: pending.queues,
+    [DEAD_LETTER_KEY]: failedQueues,
+    [FAILED_OVERFLOW_KEY]: failedOverflow,
+    [ERROR_KEY]: null,
+  });
+}
+
+async function recordUploadError(error) {
+  if (error.status === 401) {
+    await chrome.storage.local.remove(TOKEN_KEY);
+  }
+  await chrome.storage.local.set({
+    [ERROR_KEY]: error.status === 401
+      ? "ConvoLab sign-in expired. Sign in again to sync."
+      : error.message,
+  });
 }
 
 async function signIn(email, password) {
@@ -426,12 +503,8 @@ async function status() {
     ERROR_KEY,
     TRACKING_ERROR_KEY,
   ]);
-  const userId = values[USER_KEY]?.id;
-  const queues = values[QUEUE_KEY] || {};
-  const failedQueues = values[DEAD_LETTER_KEY] || {};
-  const failedOverflow = values[FAILED_OVERFLOW_KEY] || {};
-  const userKey = userId ? String(userId) : null;
   const active = values[ACTIVE_KEY];
+  const queueStatus = storedQueueStatus(values);
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
     user: values[USER_KEY] || null,
@@ -439,12 +512,46 @@ async function status() {
     trackingLabel: active
       ? studyActivityForTrackingType(active.trackingType).recordingLabel
       : null,
-    pendingCount: userKey ? (queues[userKey] || []).length : 0,
-    failedCount: userKey
-      ? (failedQueues[userKey] || []).length + (failedOverflow[userKey] || 0)
-      : 0,
+    pendingCount: queueStatus.pendingCount,
+    failedCount: queueStatus.failedCount,
     error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
   };
+}
+
+function storedQueueStatus(values) {
+  const userId = values[USER_KEY]?.id;
+  if (!userId) {
+    return { pendingCount: 0, failedCount: 0 };
+  }
+  const userKey = String(userId);
+  const queues = storedCollection(values, QUEUE_KEY);
+  const failedQueues = storedCollection(values, DEAD_LETTER_KEY);
+  const failedOverflow = storedCollection(values, FAILED_OVERFLOW_KEY);
+  return {
+    pendingCount: storedEntries(queues, userKey).length,
+    failedCount: storedEntries(failedQueues, userKey).length
+      + storedCount(failedOverflow, userKey),
+  };
+}
+
+function storedCollection(values, key) {
+  return values[key] || {};
+}
+
+function storedEntries(collection, key) {
+  return collection[key] || [];
+}
+
+function storedCount(collection, key) {
+  return collection[key] || 0;
+}
+
+async function signInFromMessage(message) {
+  if (typeof message.email !== "string" || typeof message.password !== "string") {
+    throw new Error("Email and password are required.");
+  }
+  await signIn(message.email.trim(), message.password);
+  return status();
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -482,11 +589,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "GET_STATUS":
         return status();
       case "SIGN_IN":
-        if (typeof message.email !== "string" || typeof message.password !== "string") {
-          throw new Error("Email and password are required.");
-        }
-        await signIn(message.email.trim(), message.password);
-        return status();
+        return signInFromMessage(message);
       case "SIGN_OUT":
         await signOut();
         return status();
@@ -570,3 +673,13 @@ async function initialize() {
 }
 
 runTracking(initialize);
+
+export {
+  hasMatchingActivity,
+  isFocusedTab,
+  pendingUpload,
+  recordUploadError,
+  resolvedTrackingTransition,
+  saveUploadResult,
+  storedQueueStatus,
+};
