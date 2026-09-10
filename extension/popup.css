@@ -118,6 +118,22 @@ button.secondary {
   margin-top: 13px;
 }
 
+.media-tools {
+  margin-top: 14px;
+  padding: 13px;
+  border: 1px solid #cbd6df;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 55%);
+}
+
+.media-tools .help {
+  margin: 5px 0 10px;
+}
+
+.media-tools button {
+  width: 100%;
+}
+
 .error {
   margin-top: 12px;
   padding: 9px;

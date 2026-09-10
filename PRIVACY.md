@@ -1,10 +1,14 @@
 # ConvoLab Study Tracker Privacy Policy
 
-Effective August 31, 2026
+Effective September 10, 2026
 
 ConvoLab Study Tracker records active study time on supported WaniKani review
 pages and Satori Reader article pages and syncs completed sessions to the
 user's ConvoLab account.
+
+On Netflix and YouTube, a user can explicitly enable dual subtitles and a
+temporary rolling audio buffer, then choose a subtitle to create a ConvoLab
+audio-recognition card.
 
 ## Data the extension processes
 
@@ -21,17 +25,30 @@ user's ConvoLab account.
   window and tab focus, Chrome's active/idle state, and the timestamps of user
   interactions. Exact page URLs and interaction events are not included in the
   study sessions sent to ConvoLab.
+- **Video subtitles.** After dialogue capture is enabled for a Netflix or
+  YouTube tab, the extension reads available Japanese and English subtitle
+  tracks to display them together. Subtitle text is processed locally until the
+  user chooses to create a card. Only the selected Japanese dialogue, English
+  meaning, title, and source URL are then sent to ConvoLab.
+- **Temporary tab audio.** Dialogue capture keeps up to three minutes of the
+  enabled tab's audio in memory so the user can adjust a selected clip. The
+  rolling buffer is not written to Chrome storage. Only the trimmed clip is
+  uploaded, and only after the user selects **Create at front of queue**. The
+  buffer is discarded when capture stops, the tab closes, or the user signs
+  out.
 
 The extension does not read, store, or transmit WaniKani answers, Satori Reader
-article content, form values, or credentials for either service. It does not
-monitor pages outside the WaniKani, Satori Reader, and ConvoLab origins declared
-in its manifest.
+article content, unrelated Netflix or YouTube page content, form values, or
+credentials for those services. It does not monitor pages outside the
+WaniKani, Satori Reader, Netflix, YouTube, and ConvoLab origins declared in its
+manifest.
 
 ## How data is used
 
 Data is used only to authenticate the user's ConvoLab account, measure active
-study time, synchronize completed study sessions, display synchronization
-status, and prevent duplicate session uploads.
+study time, synchronize completed study sessions, display dual subtitles,
+create user-requested audio-recognition cards, display synchronization status,
+and prevent duplicate session uploads.
 
 The extension does not sell user data, use it for advertising or credit
 decisions, or transfer it for purposes unrelated to its single study-tracking
@@ -52,6 +69,10 @@ Successfully synchronized study sessions are retained in the user's ConvoLab
 account. For privacy questions or requests concerning ConvoLab account data,
 use the developer contact information on the extension's Chrome Web Store
 listing.
+
+Selected subtitle text, source metadata, and trimmed audio clips used to create
+cards are retained with those cards in the user's ConvoLab account until the
+user deletes them.
 
 ## Changes
 
