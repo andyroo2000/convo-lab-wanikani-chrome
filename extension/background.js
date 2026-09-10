@@ -20,6 +20,7 @@ import {
   studySessionPayload,
   trackingTransition,
 } from "./lib/session.js";
+import { installMediaMessages, mediaStatus, startMediaMode, stopMediaMode } from "./lib/media-background.js";
 
 const API_BASE_URL = "https://convo-lab.com";
 const TOKEN_KEY = "convoLabAccessToken";
@@ -480,6 +481,7 @@ async function signIn(email, password) {
 }
 
 async function signOut() {
+  await stopMediaMode({ discardEditor: true });
   await finishSession();
   await flushPending();
   const values = await stored(TOKEN_KEY);
@@ -515,6 +517,7 @@ async function status() {
     pendingCount: queueStatus.pendingCount,
     failedCount: queueStatus.failedCount,
     error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
+    ...await mediaStatus(),
   };
 }
 
@@ -596,12 +599,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "SYNC_NOW":
         await flushPending();
         return status();
+      case "START_MEDIA_MODE":
+        await startMediaMode();
+        return status();
+      case "STOP_MEDIA_MODE":
+        await stopMediaMode();
+        return status();
       default:
         throw new Error("Unsupported extension message.");
     }
   };
 
-  serialize(popupOperation)
+  // Capture has its own lifecycle queue; slow media work must not delay study-session boundaries.
+  const runOperation = ["START_MEDIA_MODE", "STOP_MEDIA_MODE"].includes(message.type)
+    ? operation => Promise.resolve().then(operation)
+    : serialize;
+  runOperation(popupOperation)
     .then((result) => sendResponse({ ok: true, result }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
@@ -672,6 +685,7 @@ async function initialize() {
   await flushPending();
 }
 
+installMediaMessages();
 runTracking(initialize);
 
 export {

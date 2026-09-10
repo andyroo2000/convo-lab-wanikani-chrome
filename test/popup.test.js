@@ -36,9 +36,9 @@ test("signed-in status is green before active tracking begins", () => {
   );
 });
 
-test("manifest and popup disclose both supported study services", () => {
+test("manifest and popup disclose study tracking and media mining services", () => {
   assert.equal(manifest.name, "ConvoLab Study Tracker");
-  assert.equal(manifest.version, "0.2.1");
+  assert.equal(manifest.version, "0.3.0");
   assert.deepEqual(manifest.icons, {
     16: "icons/icon16.png",
     32: "icons/icon32.png",
@@ -49,8 +49,13 @@ test("manifest and popup disclose both supported study services", () => {
   assert.equal(manifest.action.default_icon[32], "icons/icon32.png");
   assert.ok(manifest.host_permissions.includes("https://www.satorireader.com/*"));
   assert.ok(manifest.content_scripts[0].matches.includes("https://www.satorireader.com/*"));
+  assert.ok(manifest.host_permissions.includes("https://www.youtube.com/*"));
+  assert.ok(manifest.host_permissions.includes("https://www.netflix.com/*"));
+  assert.ok(manifest.permissions.includes("tabCapture"));
+  assert.ok(manifest.permissions.includes("offscreen"));
   assert.match(popupHTML, /WaniKani review and Satori Reader time/);
-  assert.match(popupHTML, /page content stay private/);
+  assert.match(popupHTML, /Selected dialogue, audio, and an optional screenshot are sent/);
+  assert.match(popupHTML, /Enable on this tab/);
 });
 
 test("reader scrolling counts as trusted study interaction", () => {

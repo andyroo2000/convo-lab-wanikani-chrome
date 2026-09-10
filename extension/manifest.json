@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ConvoLab Study Tracker",
-  "description": "Records active WaniKani review and Satori Reader time in ConvoLab.",
-  "version": "0.2.1",
+  "description": "Tracks study time and turns Netflix or YouTube dialogue into ConvoLab listening cards.",
+  "version": "0.3.0",
   "minimum_chrome_version": "120",
   "permissions": [
+    "activeTab",
     "alarms",
     "idle",
+    "offscreen",
+    "tabCapture",
     "storage"
   ],
   "host_permissions": [
@@ -14,7 +17,10 @@
     "https://wanikani.com/*",
     "https://*.wanikani.com/*",
     "https://satorireader.com/*",
-    "https://www.satorireader.com/*"
+    "https://www.satorireader.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://www.netflix.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -46,6 +52,38 @@
         "content.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://www.netflix.com/*"
+      ],
+      "js": [
+        "lib/subtitles.js",
+        "media-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://www.netflix.com/*"
+      ],
+      "js": [
+        "lib/ids.js",
+        "lib/audio.js",
+        "lib/screenshot-buffer.js",
+        "lib/screenshot-picker.js",
+        "lib/editor-controls.js",
+        "media-content.js"
+      ],
+      "css": [
+        "media-content.css"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }

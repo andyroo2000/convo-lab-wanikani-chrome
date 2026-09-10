@@ -49,6 +49,11 @@
           </div>
         </div>
         <p id="pending-label" class="help"></p>
+        <section id="media-tools" class="media-tools" hidden>
+          <strong>Netflix &amp; YouTube</strong>
+          <p id="media-help" class="help">Show Japanese and English subtitles and keep a private rolling audio buffer for card creation.</p>
+          <button id="toggle-media" type="button">Enable on this tab</button>
+        </section>
         <div class="button-row">
           <button id="sync" type="button">Sync now</button>
           <button id="sign-out" class="secondary" type="button">Sign out</button>
@@ -57,7 +62,7 @@
 
       <p id="error" class="error" role="alert" hidden></p>
       <p class="privacy">
-        Records activity on WaniKani review and Satori Reader article pages only. Answers and page content stay private.
+        Study-time tracking never reads answers or article content. Selected dialogue, audio, and an optional screenshot are sent to ConvoLab only when you create a card.
       </p>
     </main>
     <script type="module" src="popup.js"></script>

@@ -31,6 +31,7 @@ globalThis.chrome = {
     onMessage: event(),
   },
   storage: {
+    onChanged: event(),
     local: {
       async get(keys) {
         const requested = Array.isArray(keys) ? keys : [keys];

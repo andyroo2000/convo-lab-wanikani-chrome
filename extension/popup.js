@@ -8,6 +8,10 @@ const accountLabel = document.querySelector("#account-label");
 const pendingLabel = document.querySelector("#pending-label");
 const syncButton = document.querySelector("#sync");
 const signOutButton = document.querySelector("#sign-out");
+const mediaTools = document.querySelector("#media-tools");
+const mediaHelp = document.querySelector("#media-help");
+const toggleMediaButton = document.querySelector("#toggle-media");
+let mediaCaptureActive = false;
 
 async function send(message) {
   const response = await chrome.runtime.sendMessage(message);
@@ -49,6 +53,19 @@ function render(status) {
   if (status.failedCount) {
     pendingLabel.textContent += ` ${status.failedCount} session${status.failedCount === 1 ? "" : "s"} could not be synced.`;
   }
+  renderMediaTools(status);
+}
+
+function renderMediaTools(status) {
+  mediaCaptureActive = status.mediaCaptureActive;
+  mediaTools.hidden = !status.mediaSupported;
+  toggleMediaButton.textContent = mediaCaptureActive
+    ? "Stop dialogue capture"
+    : "Enable on this tab";
+  toggleMediaButton.classList.toggle("secondary", mediaCaptureActive);
+  mediaHelp.textContent = mediaCaptureActive
+    ? "Dual subtitles are on. Use + Card beside a Japanese subtitle to trim and save its audio."
+    : "Show dual subtitles and temporarily keep audio and video stills for cards. Only your selected clip and optional image are uploaded.";
 }
 
 signInForm.addEventListener("submit", async (event) => {
@@ -68,21 +85,25 @@ signInForm.addEventListener("submit", async (event) => {
   }
 });
 
-syncButton.addEventListener("click", async () => {
+async function runCommand(type) {
   setBusy(true);
   try {
-    render(await send({ type: "SYNC_NOW" }));
+    render(await send({ type }));
   } catch (error) {
     showError(error.message);
   } finally {
     setBusy(false);
   }
-});
+}
 
-signOutButton.addEventListener("click", async () => {
+syncButton.addEventListener("click", () => runCommand("SYNC_NOW"));
+signOutButton.addEventListener("click", () => runCommand("SIGN_OUT"));
+
+toggleMediaButton.addEventListener("click", async () => {
   setBusy(true);
+  showError("");
   try {
-    render(await send({ type: "SIGN_OUT" }));
+    render(await send({ type: mediaCaptureActive ? "STOP_MEDIA_MODE" : "START_MEDIA_MODE" }));
   } catch (error) {
     showError(error.message);
   } finally {
