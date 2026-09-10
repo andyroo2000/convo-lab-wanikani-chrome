@@ -610,7 +610,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   };
 
-  serialize(popupOperation)
+  const runOperation = ["START_MEDIA_MODE", "STOP_MEDIA_MODE"].includes(message.type)
+    ? operation => Promise.resolve().then(operation)
+    : serialize;
+  runOperation(popupOperation)
     .then((result) => sendResponse({ ok: true, result }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
@@ -681,7 +684,7 @@ async function initialize() {
   await flushPending();
 }
 
-installMediaMessages(serialize);
+installMediaMessages();
 runTracking(initialize);
 
 export {

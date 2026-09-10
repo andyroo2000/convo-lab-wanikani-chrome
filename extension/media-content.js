@@ -9,6 +9,7 @@
   let englishLine = null;
   let cardButton = null;
   let toastTimer = null;
+  let closeEditor = null;
   const screenshots = ConvoLabScreenshots.createBuffer(send);
 
   async function send(message) {
@@ -63,7 +64,7 @@
     if (!enabled) {
       screenshots.clear();
       subtitleBox.hidden = true;
-      host.querySelector(".convolab-editor-backdrop")?.remove();
+      closeEditor?.(false);
     }
     window.dispatchEvent(new CustomEvent(COMMAND_EVENT, { detail: { enabled } }));
   }
@@ -187,8 +188,12 @@
         <h2 id="convolab-editor-title">New audio recognition card</h2>
         <label>Japanese dialogue<textarea name="japanese" required></textarea></label>
         <label>English meaning<textarea name="english" required></textarea></label>
-        <label>Drag the orange handles to trim the audio</label>
+        <p>Drag the orange handles or edit the start and end times to trim the audio.</p>
         <canvas class="convolab-waveform" aria-label="Audio waveform with draggable start and end handles"></canvas>
+        <div class="convolab-trim-inputs">
+          <label>Start (seconds)<input name="trimStart" type="number" step="0.01"></label>
+          <label>End (seconds)<input name="trimEnd" type="number" step="0.01"></label>
+        </div>
         <div class="convolab-trim-values"><span data-start></span><span data-duration></span><span data-end></span></div>
         <div class="convolab-fades">
           <label><input type="checkbox" name="fadeIn" checked> Fast fade-in</label>
@@ -215,7 +220,9 @@
     const audio = new Audio(playbackUrl);
     let playbackTimer = null;
     const peaks = ConvoLabAudio.waveformPeaks(samples, 480);
+    const syncTrimInputs = ConvoLabEditorControls.bindTrimInputs(backdrop, duration, changeTrim);
     const update = () => {
+      syncTrimInputs(trimStart, trimEnd);
       drawWaveform(canvas, peaks, trimStart / duration, trimEnd / duration);
       picker.update(trimStart, trimEnd);
       backdrop.querySelector("[data-start]").textContent = `Start ${trimStart.toFixed(2)}s`;
@@ -223,6 +230,13 @@
       backdrop.querySelector("[data-end]").textContent = `End ${trimEnd.toFixed(2)}s`;
     };
     update();
+
+    function changeTrim(side, value) {
+      const bounded = Math.max(0, Math.min(duration, value));
+      if (side === "start") trimStart = Math.min(bounded, trimEnd - 0.1);
+      else trimEnd = Math.max(bounded, trimStart + 0.1);
+      update();
+    }
 
     let dragging = null;
     canvas.addEventListener("pointerdown", (event) => {
@@ -234,9 +248,7 @@
       if (!dragging) return;
       const ratio = Math.max(0, Math.min(1, (event.clientX - canvas.getBoundingClientRect().left) / canvas.clientWidth));
       const value = ratio * duration;
-      if (dragging === "start") trimStart = Math.min(value, trimEnd - 0.1);
-      else trimEnd = Math.max(value, trimStart + 0.1);
-      update();
+      changeTrim(dragging, value);
     });
     canvas.addEventListener("pointerup", () => { dragging = null; });
     window.addEventListener("resize", update, { once: true });
@@ -246,8 +258,13 @@
       audio.pause();
       URL.revokeObjectURL(playbackUrl);
       backdrop.remove();
+      window.removeEventListener("resize", update);
+      restoreFocus();
+      closeEditor = null;
       if (resume) video.play().catch(() => {});
     };
+    const restoreFocus = ConvoLabEditorControls.bindDialog(backdrop, close, cardButton);
+    closeEditor = close;
     backdrop.querySelector("[data-cancel]").addEventListener("click", () => close());
     backdrop.querySelector("[data-preview]").addEventListener("click", async () => {
       clearInterval(playbackTimer);

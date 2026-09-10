@@ -29,7 +29,7 @@ function playerHarness(hostname, responses, playerResponse = null) {
   for (const file of ["lib/subtitles.js", "media-main.js"]) {
     vm.runInContext(readFileSync(new URL(`../extension/${file}`, import.meta.url), "utf8"), context);
   }
-  return { context, updates, enable: () => listeners.get("convolab-media-command")({detail:{enabled:true}}) };
+  return { context, updates, enable: (enabled = true) => listeners.get("convolab-media-command")({detail:{enabled}}) };
 }
 
 const captions = text => JSON.stringify({events:[{tStartMs:1000,dDurationMs:3000,segs:[{utf8:text}]}]});
@@ -67,7 +67,13 @@ test("Netflix extracts nested tracks and publishes matching subtitle cues", asyn
   const harness = playerHarness("www.netflix.com",responses);
   await harness.context.fetch("https://www.netflix.com/manifest");
   await settle(); harness.enable(); await settle(); harness.context.tick();
+  assert.equal(harness.updates.find(update => update.kind === "cue")?.japanese, null);
+  harness.updates.length = 0;
+  await harness.context.fetch("https://www.netflix.com/manifest");
+  await settle(); harness.context.tick();
   const cue = harness.updates.find(update => update.kind === "cue");
   assert.equal(cue.japanese.text,"今日は行けない。");
   assert.equal(cue.english.text,"I cannot go today.");
+  harness.enable(false); harness.enable(); await settle(); harness.context.tick();
+  assert.equal(harness.updates.at(-1).japanese, null);
 });

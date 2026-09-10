@@ -11,6 +11,7 @@
     loading: false,
     lastPublishedKey: null,
     netflixTracks: [],
+    generation: 0,
   };
 
   function dispatch(detail) {
@@ -93,6 +94,7 @@
   }
 
   async function loadYouTubePair(source) {
+    const generation = state.generation;
     const japaneseTrack = japaneseYoutubeTrack(source.tracks);
     if (!japaneseTrack) throw new Error("This video has no Japanese subtitle track.");
     const englishTrack = helpers.selectLanguageTrack(source.tracks, "en");
@@ -101,12 +103,17 @@
       englishYoutubeTrack(englishTrack, japaneseTrack).catch(() => []),
     ]);
     if (youtubeSource()?.sourceKey !== source.sourceKey) return;
+    if (!captureIsCurrent(generation)) return;
     const englishName = englishTrack ? trackName(englishTrack) : "English translation";
     publishLoadedTracks(source.sourceKey, japanese, english, `${trackName(japaneseTrack)} + ${englishName}`);
   }
 
   function alreadyLoaded(key) {
     return state.sourceKey === key && state.japanese.length > 0;
+  }
+
+  function captureIsCurrent(generation) {
+    return state.enabled && generation === state.generation;
   }
 
   async function loadYouTube() {
@@ -161,6 +168,7 @@
   }
 
   async function inspectNetflixPayload(payload) {
+    if (!state.enabled) return;
     const tracks = normalizeNetflixTracks(payload);
     if (!tracks.length) return;
     state.netflixTracks = tracks;
@@ -183,6 +191,7 @@
 
   async function loadNetflix() {
     if (state.loading || !state.netflixTracks.length) return;
+    const generation = state.generation;
     const japaneseTrack = helpers.selectLanguageTrack(state.netflixTracks, "ja");
     const englishTrack = helpers.selectLanguageTrack(state.netflixTracks, "en");
     if (!japaneseTrack) {
@@ -197,6 +206,7 @@
         fetchNetflixTrack(japaneseTrack),
         englishTrack ? fetchNetflixTrack(englishTrack) : Promise.resolve([]),
       ]);
+      if (!captureIsCurrent(generation)) return;
       publishLoadedTracks(sourceKey, japanese, english, `${trackName(japaneseTrack)} + ${trackName(englishTrack)}`);
     } catch (error) {
       dispatch({ kind: "availability", available: false, message: error.message });
@@ -205,9 +215,16 @@
     }
   }
 
+  function shouldInspectNetflix(url) {
+    return state.enabled && location.hostname.endsWith("netflix.com") && MANIFEST_URL_PATTERN.test(String(url));
+  }
+
   function inspectResponse(url, response) {
-    if (!location.hostname.endsWith("netflix.com") || !MANIFEST_URL_PATTERN.test(String(url))) return;
-    response.clone().json().then(inspectNetflixPayload).catch(() => {});
+    if (!shouldInspectNetflix(url)) return;
+    const generation = state.generation;
+    response.clone().json().then(payload => {
+      if (captureIsCurrent(generation)) return inspectNetflixPayload(payload);
+    }).catch(() => {});
   }
 
   const originalFetch = globalThis.fetch;
@@ -220,7 +237,7 @@
   const originalOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function convoLabOpen(method, url, ...rest) {
     this.addEventListener("load", () => {
-      if (!MANIFEST_URL_PATTERN.test(String(url))) return;
+      if (!shouldInspectNetflix(url)) return;
       try {
         if (typeof this.responseText === "string") inspectNetflixPayload(JSON.parse(this.responseText));
       } catch {
@@ -254,11 +271,19 @@
   window.addEventListener(COMMAND_EVENT, (event) => {
     state.enabled = event.detail?.enabled === true;
     if (!state.enabled) {
+      state.generation += 1;
+      state.sourceKey = null;
+      state.japanese = [];
+      state.english = [];
+      state.netflixTracks = [];
       state.lastPublishedKey = null;
       return;
     }
     if (location.hostname.endsWith("youtube.com")) loadYouTube();
-    else loadNetflix();
+    else {
+      dispatch({kind: "availability", available: false, message: "If subtitles do not appear, reopen this Netflix title now that capture is enabled."});
+      loadNetflix();
+    }
   });
 
   document.addEventListener("yt-navigate-finish", () => {

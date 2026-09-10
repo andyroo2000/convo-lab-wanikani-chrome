@@ -4,6 +4,20 @@ import { captureScreenshot } from "./screenshot-capture.js";
 
 const MEDIA_CAPTURE_TAB_KEY = "convoLabMediaCaptureTabId";
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+let mediaWork = Promise.resolve();
+let captureWork = Promise.resolve();
+
+function serializeMedia(operation) {
+  const result = mediaWork.then(operation);
+  mediaWork = result.catch(() => {});
+  return result;
+}
+
+function serializeCapture(operation) {
+  const result = captureWork.then(operation);
+  captureWork = result.catch(() => {});
+  return result;
+}
 
 async function ensureOffscreenDocument() {
   const contexts = await chrome.runtime.getContexts({
@@ -35,20 +49,20 @@ async function notifyMediaMode(tabId, enabled) {
   await chrome.tabs.sendMessage(tabId, { type: "SET_MEDIA_MODE", enabled }).catch(() => {});
 }
 
-async function stopMediaMode(tabId = null) {
+async function stopCapture(tabId = null) {
   const resolvedTabId = tabId ?? await capturedTabId();
   await sendToOffscreen({ type: "STOP_MEDIA_CAPTURE" }).catch(() => {});
   await chrome.storage.session.remove(MEDIA_CAPTURE_TAB_KEY);
   await notifyMediaMode(resolvedTabId, false);
 }
 
-async function startMediaMode() {
+async function startCapture() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !isSupportedMediaURL(tab.url)) {
     throw new Error("Open a Netflix or YouTube video before enabling dialogue capture.");
   }
   const previousTabId = await capturedTabId();
-  if (previousTabId && previousTabId !== tab.id) await stopMediaMode(previousTabId);
+  if (previousTabId && previousTabId !== tab.id) await stopCapture(previousTabId);
   await ensureOffscreenDocument();
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
   await sendToOffscreen({ type: "START_MEDIA_CAPTURE", streamId, tabId: tab.id });
@@ -93,7 +107,7 @@ async function captureEnded(tabId) {
 
 function handleMediaMessage(message, sender, respond, serialize) {
   if (message?.type === "MEDIA_CAPTURE_ENDED") {
-    return handleCaptureEnded(message, sender, serialize);
+    return handleCaptureEnded(message, sender, serializeCapture);
   }
   if (!isMediaSender(sender)) return false;
   if (!["GET_MEDIA_MODE_STATE", "GET_AUDIO_WINDOW", "CREATE_MEDIA_CARD", "CAPTURE_SCREENSHOT"].includes(message?.type)) return false;
@@ -112,7 +126,7 @@ function handleCaptureEnded(message, sender, serialize) {
 
 function installCaptureLifecycle(serialize) {
   const stopTab = tabId => serialize(async () => {
-    if (await capturedTabId() === tabId) await stopMediaMode(tabId);
+    if (await capturedTabId() === tabId) await stopCapture(tabId);
   }).catch(() => {});
   chrome.tabs.onRemoved.addListener(stopTab);
   chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -120,9 +134,15 @@ function installCaptureLifecycle(serialize) {
   });
 }
 
-export function installMediaMessages(serialize) {
-  chrome.runtime.onMessage.addListener((message, sender, respond) => handleMediaMessage(message, sender, respond, serialize));
-  installCaptureLifecycle(serialize);
+export function installMediaMessages() {
+  chrome.runtime.onMessage.addListener((message, sender, respond) => handleMediaMessage(message, sender, respond, serializeMedia));
+  installCaptureLifecycle(serializeCapture);
 }
 
-export { startMediaMode, stopMediaMode };
+export function startMediaMode() {
+  return serializeCapture(startCapture);
+}
+
+export function stopMediaMode() {
+  return serializeCapture(() => stopCapture());
+}

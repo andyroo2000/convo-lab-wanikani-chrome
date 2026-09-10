@@ -76,6 +76,7 @@
         "lib/audio.js",
         "lib/screenshot-buffer.js",
         "lib/screenshot-picker.js",
+        "lib/editor-controls.js",
         "media-content.js"
       ],
       "css": [

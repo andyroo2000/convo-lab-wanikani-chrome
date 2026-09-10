@@ -38,8 +38,8 @@ select **Enable on this tab**. The extension then:
   those tracks available;
 - keeps up to three minutes of that tab's audio in memory only;
 - adds a **+ Card** control beside each current Japanese subtitle; and
-- opens a waveform editor where the clip start and end can be dragged, played
-  back, and given optional 25 ms fade-in and fade-out edges;
+- opens a waveform editor with draggable handles and keyboard-editable start/end
+  times, playback, and optional 25 ms fade-in and fade-out edges;
 - keeps a bounded, temporary buffer of video stills and offers up to five from
   the trimmed audio span, with **No image** selected by default; and
 - optionally includes the chosen screenshot on the front of the listening card.
@@ -48,12 +48,16 @@ Screenshots are sampled about once every 1.2 seconds, cropped to the video,
 and kept in memory for up to three minutes (at most 16 MiB of encoded images).
 Browser protection may make screenshots unavailable, particularly on Netflix.
 Blank captures are skipped; audio-only cards remain available.
+Netflix subtitle metadata is read only after enabling capture. If the title was
+already loaded, reopen it after enabling so the extension can see its subtitle
+tracks. The editor supports Tab navigation and Escape to cancel.
 
 Creating the card submits the edited text, trimmed WAV, and optional selected
 image in one multipart request to `POST /api/study/cards/capture`. Card creation,
 both media attachments, and queue-front promotion commit atomically. The editor
 retains a stable card ID across retries, preventing duplicates after a lost
-response. Stopping capture, closing the tab, navigating to another site, or
+response while the editor remains open; unsent cards are not saved across tab
+closure. Stopping capture, closing the tab, navigating to another site, or
 signing out discards the buffers.
 
 See the [privacy policy](PRIVACY.md) for the complete data-handling disclosure.

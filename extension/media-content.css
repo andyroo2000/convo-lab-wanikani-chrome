@@ -132,6 +132,7 @@ body.convolab-media-enabled [data-uia="player-subtitle-text"] {
 }
 
 .convolab-trim-values,
+.convolab-trim-inputs,
 .convolab-editor-actions,
 .convolab-fades {
   display: flex;
@@ -141,6 +142,7 @@ body.convolab-media-enabled [data-uia="player-subtitle-text"] {
 }
 
 .convolab-trim-values { justify-content: space-between; margin-top: 5px; color: #4e6378; font-size: 13px; }
+.convolab-trim-inputs input { display: block; width: 140px; padding: 6px; margin-top: 4px; color: #10243a; background: white; border: 1px solid #93a7bc; border-radius: 6px; }
 .convolab-fades label { margin: 8px 0; font-weight: 600; }
 .convolab-editor-actions { justify-content: flex-end; margin-top: 18px; }
 .convolab-editor button {
