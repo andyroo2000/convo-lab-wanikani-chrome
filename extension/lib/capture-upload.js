@@ -29,10 +29,18 @@ function errorMessage(payload, status) {
     || payload?.message || `Card creation failed (${status}).`;
 }
 
-export async function createCapturedAudioCard(message) {
-  const values = await chrome.storage.local.get("convoLabAccessToken");
+async function captureToken(expectedAccountId) {
+  const values = await chrome.storage.local.get(["convoLabAccessToken", "convoLabUser"]);
   const token = values.convoLabAccessToken;
   if (!token) throw new Error("Sign in to ConvoLab before creating a card.");
+  if (!expectedAccountId || String(values.convoLabUser?.id) !== String(expectedAccountId)) {
+    throw new Error("This draft belongs to a different ConvoLab account. Capture the dialogue again.");
+  }
+  return token;
+}
+
+export async function createCapturedAudioCard(message, expectedAccountId) {
+  const token = await captureToken(expectedAccountId);
   const response = await fetch("https://convo-lab.com/api/study/cards/capture", {
     method: "POST",
     headers: { Accept: "application/json", Authorization: `Bearer ${token}` },

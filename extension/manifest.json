@@ -73,6 +73,7 @@
         "https://www.netflix.com/*"
       ],
       "js": [
+        "lib/ids.js",
         "lib/audio.js",
         "lib/screenshot-buffer.js",
         "lib/screenshot-picker.js",

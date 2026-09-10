@@ -9,7 +9,7 @@ async function harness() {
   const values = {};
   const events = {};
   const sent = [];
-  const account = {convoLabAccessToken:"test-token"};
+  const account = {convoLabAccessToken:"test-token",convoLabUser:{id:7}};
   let tab = {id: 1, url: "https://www.youtube.com/watch?v=example"};
   const listener = name => ({addListener(fn) { events[name] = fn; }});
   globalThis.chrome = {
@@ -90,9 +90,47 @@ test("capture requires authentication and account changes discard stopped-tab dr
   const h = await harness();
   delete h.account.convoLabAccessToken;
   await assert.rejects(h.api.startMediaMode(), /Sign in/);
-  h.events.storage({convoLabAccessToken:{oldValue:"test-token"}}, "local");
+  h.events.storage({convoLabUser:{oldValue:{id:7},newValue:{id:8}}}, "local");
   await tick();
   assert.ok(h.sent.some(message => message.id === 1 && message.discardEditor));
+});
+
+test("an expired token stops capture without discarding drafts; same-account refresh retains the grant", async () => {
+  const h = await harness();
+  await h.api.startMediaMode();
+  const grantKey = "convoLabCaptureGrant:1";
+  h.events.storage({convoLabAccessToken:{oldValue:"test-token"}}, "local");
+  await tick();
+  assert.equal(h.values[captureKey],undefined);
+  assert.equal(h.values[grantKey].accountId,"7");
+  assert.equal(h.sent.some(message => message.discardEditor),false);
+  assert.ok(h.sent.some(message => message.type === "MEDIA_AUTH_EXPIRED"));
+  h.events.storage({convoLabUser:{oldValue:{id:7},newValue:{id:"7"}},convoLabAccessToken:{newValue:"renewed"}}, "local");
+  await tick();
+  assert.equal(h.values[grantKey].accountId,"7");
+});
+
+test("capture grants are cleared for closed tabs and explicit sign-out, including stopped tabs", async () => {
+  const h = await harness();
+  await h.api.startMediaMode();
+  await h.api.stopMediaMode();
+  h.events.removed(1);
+  await tick();
+  assert.equal(h.values["convoLabCaptureGrant:1"],undefined);
+  await h.api.startMediaMode();
+  await h.api.stopMediaMode();
+  await h.api.stopMediaMode({discardEditor:true});
+  assert.equal(h.values["convoLabCaptureGrant:1"],undefined);
+  assert.ok(h.sent.some(message => message.id === 1 && message.discardEditor));
+});
+
+test("card saves reject tabs with no capture grant and grants from another account", async () => {
+  const h = await harness();
+  const save = () => new Promise(resolve => h.events.message({type:"CREATE_MEDIA_CARD"},h.sender(),resolve));
+  assert.match((await save()).error,/Enable dialogue capture/);
+  await h.api.startMediaMode();
+  h.account.convoLabUser = {id:8};
+  assert.match((await save()).error,/different ConvoLab account/);
 });
 
 test("saving a copied clip survives Stop and bypasses a pending recorder operation", async () => {

@@ -51,6 +51,8 @@ audio-recognition card.
 An already open audio editor retains its selected clip and candidate images in
 memory after capture stops, so a failed save can be retried. The draft is cleared
 when the editor or tab closes, or when the ConvoLab account changes or signs out.
+Session expiry alone preserves the draft for retry after signing back into the
+same account; recording stops and the editor displays a sign-in notice.
 
 The extension does not read, store, or transmit WaniKani answers, Satori Reader
 article content, form values, or credentials for those services. Video capture

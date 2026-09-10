@@ -189,7 +189,7 @@
       trimEnd = Math.min(duration, duration / 2 + 1.5);
     }
 
-    const cardId = captureId();
+    const cardId = ConvoLabIds.createULID();
     const backdrop = document.createElement("div");
     backdrop.className = "convolab-editor-backdrop";
     backdrop.innerHTML = `
@@ -331,15 +331,6 @@
     });
   }
 
-  function captureId() {
-    const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    let value = BigInt(Date.now());
-    for (const byte of crypto.getRandomValues(new Uint8Array(10))) value = (value << 8n) | BigInt(byte);
-    let id = "";
-    for (let i = 0; i < 26; i += 1) { id = alphabet[Number(value & 31n)] + id; value >>= 5n; }
-    return id;
-  }
-
   setInterval(() => { if (enabled) screenshots.sample(videoElement()); }, 1200);
 
   window.addEventListener(UPDATE_EVENT, (event) => {
@@ -360,5 +351,9 @@
     .catch(() => {});
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "SET_MEDIA_MODE") setEnabled(message.enabled === true, message.discardEditor === true);
+    if (message?.type === "MEDIA_AUTH_EXPIRED") {
+      setEnabled(false);
+      if (closeEditor) showToast("Your ConvoLab session expired. Sign in again to save this draft.", 10000);
+    }
   });
 })();

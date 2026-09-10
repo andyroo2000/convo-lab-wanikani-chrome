@@ -1,6 +1,7 @@
 import { isSupportedMediaURL } from "./card.js";
 import { createCapturedAudioCard } from "./capture-upload.js";
 import { captureScreenshot } from "./screenshot-capture.js";
+import { accountChanged, captureAccount, capturedTabAccount, forgetCapturedTab, grantCapturedTab } from "./capture-grants.js";
 
 const MEDIA_CAPTURE_TAB_KEY = "convoLabMediaCaptureTabId";
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
@@ -56,13 +57,8 @@ async function stopCapture(tabId = null, discardEditor = false) {
   await notifyMediaMode(resolvedTabId, false, discardEditor);
 }
 
-async function requireCaptureAccount() {
-  const values = await chrome.storage.local.get("convoLabAccessToken");
-  if (!values.convoLabAccessToken) throw new Error("Sign in to ConvoLab before enabling dialogue capture.");
-}
-
 async function startCapture() {
-  await requireCaptureAccount();
+  const accountId = await captureAccount();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !isSupportedMediaURL(tab.url)) {
     throw new Error("Open a Netflix or YouTube video before enabling dialogue capture.");
@@ -73,6 +69,7 @@ async function startCapture() {
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
   await sendToOffscreen({ type: "START_MEDIA_CAPTURE", streamId, tabId: tab.id });
   await chrome.storage.session.set({ [MEDIA_CAPTURE_TAB_KEY]: tab.id });
+  await grantCapturedTab(tab.id, accountId);
   await notifyMediaMode(tab.id, true);
 }
 
@@ -119,11 +116,16 @@ function handleMediaMessage(message, sender, respond, serialize) {
   if (!["GET_MEDIA_MODE_STATE", "GET_AUDIO_WINDOW", "CREATE_MEDIA_CARD", "CAPTURE_SCREENSHOT"].includes(message?.type)) return false;
   // Saving a copied clip is independent of the live recorder and its work queue.
   const operation = message.type === "CREATE_MEDIA_CARD"
-    ? createCapturedAudioCard(message) : serialize(() => mediaOperation(message, sender));
+    ? saveCapturedCard(message, sender.tab.id) : serialize(() => mediaOperation(message, sender));
   operation
     .then(result => respond({ok: true, result}))
     .catch(error => respond({ok: false, error: error.message}));
   return true;
+}
+
+async function saveCapturedCard(message, tabId) {
+  const accountId = await capturedTabAccount(tabId);
+  return createCapturedAudioCard(message, accountId);
 }
 
 function handleCaptureEnded(message, sender, serialize) {
@@ -135,24 +137,42 @@ function handleCaptureEnded(message, sender, serialize) {
 
 function installCaptureLifecycle(serialize) {
   const stopTab = tabId => serialize(async () => {
+    await forgetCapturedTab(tabId);
     if (await capturedTabId() === tabId) await stopCapture(tabId);
   }).catch(() => {});
   chrome.tabs.onRemoved.addListener(stopTab);
   chrome.tabs.onUpdated.addListener((tabId, change) => {
     if (change.url && !isSupportedMediaURL(change.url)) stopTab(tabId);
   });
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes.convoLabAccessToken) return;
-    serialize(discardAccountMedia).catch(() => {});
-  });
+  chrome.storage.onChanged.addListener((changes, area) => handleAccountStorageChange(changes, area, serialize));
+}
+
+function handleAccountStorageChange(changes, area, serialize) {
+  if (area !== "local") return;
+  if (accountChanged(changes)) serialize(discardAccountMedia).catch(() => {});
+  else if (changes.convoLabAccessToken && !changes.convoLabAccessToken.newValue) {
+    serialize(expireCaptureSession).catch(() => {});
+  }
+}
+
+async function expireCaptureSession() {
+  await stopCapture();
+  const tabs = await supportedMediaTabs();
+  await Promise.all(tabs.map(tab => chrome.tabs.sendMessage(tab.id, {type:"MEDIA_AUTH_EXPIRED"}).catch(() => {})));
+}
+
+async function supportedMediaTabs() {
+  return (await chrome.tabs.query({})).filter(tab => isSupportedMediaURL(tab.url));
 }
 
 async function discardAccountMedia() {
   await stopCapture(null, true);
   // A manually stopped tab may still hold an editor. Never carry that draft across accounts.
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.filter(tab => isSupportedMediaURL(tab.url))
-    .map(tab => notifyMediaMode(tab.id, false, true)));
+  const tabs = await supportedMediaTabs();
+  await Promise.all(tabs.map(async tab => {
+    await forgetCapturedTab(tab.id);
+    await notifyMediaMode(tab.id, false, true);
+  }));
 }
 
 export function installMediaMessages() {
@@ -165,5 +185,5 @@ export function startMediaMode() {
 }
 
 export function stopMediaMode({ discardEditor = false } = {}) {
-  return serializeCapture(() => stopCapture(null, discardEditor));
+  return serializeCapture(discardEditor ? discardAccountMedia : () => stopCapture());
 }

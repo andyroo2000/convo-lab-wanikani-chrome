@@ -64,6 +64,8 @@ Stopping capture preserves an already open editor so a failed save can be
 retried with the same card ID. Closing the editor or tab discards that draft;
 signing out or changing accounts also clears it. Subtitle text and video
 metadata come from the video page and should be reviewed before creating a card.
+An expired session stops recording but preserves the draft for same-account
+sign-in and retry. Draft authorization is tied to the capturing tab and account.
 
 See the [privacy policy](PRIVACY.md) for the complete data-handling disclosure.
 

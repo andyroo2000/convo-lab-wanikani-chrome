@@ -53,11 +53,11 @@ test("card creation uses one atomic request and retains the same ID on retry", a
   const calls = [];
   const oldChrome = globalThis.chrome;
   const oldFetch = globalThis.fetch;
-  globalThis.chrome = { storage: { local: { get: async () => ({ convoLabAccessToken: "test-token" }) } } };
+  globalThis.chrome = { storage: { local: { get: async () => ({ convoLabAccessToken: "test-token", convoLabUser:{id:7} }) } } };
   globalThis.fetch = async (url, options) => { calls.push({url, options}); return new Response('{"id":"saved"}', {status:201}); };
   try {
-    await createCapturedAudioCard(message());
-    await createCapturedAudioCard(message());
+    await createCapturedAudioCard(message(),"7");
+    await createCapturedAudioCard(message(),"7");
     assert.equal(calls.length, 2);
     assert.equal(calls[0].url, "https://convo-lab.com/api/study/cards/capture");
     assert.equal(calls[0].options.body.get("id"), calls[1].options.body.get("id"));
