@@ -125,7 +125,8 @@
     return new Blob([ConvoLabAudio.base64ToArrayBuffer(base64)], { type: "audio/wav" });
   }
 
-  async function openEditor() {
+  async function openEditor(event) {
+    if (!event.isTrusted) return;
     if (!current?.japanese) return;
     const video = videoElement();
     if (!video) return;
@@ -277,7 +278,8 @@
         }
       }, 20);
     });
-    backdrop.querySelector("[data-create]").addEventListener("click", async () => {
+    backdrop.querySelector("[data-create]").addEventListener("click", async (event) => {
+      if (!event.isTrusted) return;
       const buttons = [...backdrop.querySelectorAll("button")];
       buttons.forEach((button) => { button.disabled = true; });
       errorElement.hidden = true;
