@@ -127,6 +127,7 @@ test("port disconnect only forgets tabs that closed or left WaniKani", () => {
 
 test("credential operations only accept messages from this extension page", () => {
   const runtimeId = "abcdefghijklmnop";
+  assert.equal(isTrustedExtensionPageSender({id:runtimeId,url:`chrome-extension://${runtimeId}/offscreen.html`},runtimeId),false);
   assert.equal(
     isTrustedExtensionPageSender({
       id: runtimeId,

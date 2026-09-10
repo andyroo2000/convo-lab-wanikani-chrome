@@ -2,6 +2,7 @@
   const COMMAND_EVENT = "convolab-media-command";
   const UPDATE_EVENT = "convolab-subtitle-update";
   let enabled = false;
+  let captureGeneration = 0;
   let current = null;
   let host = null;
   let subtitleBox = null;
@@ -57,14 +58,15 @@
     toastTimer = setTimeout(() => toast.remove(), timeout);
   }
 
-  function setEnabled(value) {
+  function setEnabled(value, discardEditor = false) {
     enabled = value;
     ensureHost();
     document.body?.classList.toggle("convolab-media-enabled", enabled);
     if (!enabled) {
+      captureGeneration += 1;
       screenshots.clear();
       subtitleBox.hidden = true;
-      closeEditor?.(false);
+      if (discardEditor) closeEditor?.(false);
     }
     window.dispatchEvent(new CustomEvent(COMMAND_EVENT, { detail: { enabled } }));
   }
@@ -125,43 +127,48 @@
     return new Blob([ConvoLabAudio.base64ToArrayBuffer(base64)], { type: "audio/wav" });
   }
 
+  function canOpenEditor(event) {
+    return event.isTrusted && enabled && !closeEditor && Boolean(current?.japanese);
+  }
+
   async function openEditor(event) {
-    if (!event.isTrusted) return;
-    if (!current?.japanese) return;
+    if (!canOpenEditor(event)) return;
     const video = videoElement();
     if (!video) return;
     const snapshot = current;
     const now = Date.now();
-    const rate = video.playbackRate || 1;
-    const cueStartMs = now - (video.currentTime - snapshot.japanese.start) / rate * 1000;
-    const cueEndMs = now + (snapshot.japanese.end - video.currentTime) / rate * 1000;
+    const generation = captureGeneration;
     cardButton.disabled = true;
     try {
-      await finishCue(video, cueEndMs - now);
+      const { cueStartMs, cueEndMs, startTimeMs, endTimeMs } = ConvoLabAudio.cueWindow(
+        snapshot.japanese, video.currentTime, video.playbackRate, now,
+      );
+      await finishCue(video, endTimeMs - now);
+      if (!enabled || generation !== captureGeneration) return;
       video.pause();
       const windowAudio = await send({
         type: "GET_AUDIO_WINDOW",
-        startTimeMs: cueStartMs - 1000,
-        endTimeMs: cueEndMs + 1000,
+        startTimeMs,
+        endTimeMs,
       });
-      await renderEditor(snapshot, windowAudio, cueStartMs, cueEndMs, video);
+      await renderEditor(snapshot, windowAudio, cueStartMs, cueEndMs, video, generation);
     } catch (error) {
       showToast(error.message, 6000);
-      video.play().catch(() => {});
+      if (enabled) video.play().catch(() => {});
     } finally {
       cardButton.disabled = false;
     }
   }
 
   async function finishCue(video, milliseconds) {
-    const remainingMs = Math.max(0, Math.min(15_000, milliseconds + 150));
+    const remainingMs = Math.max(0, Math.min(15_000, milliseconds));
     if (remainingMs <= 150) return;
     showToast("Finishing this line before opening the audio editor…", remainingMs + 1000);
     if (video.paused) await video.play();
     await new Promise(resolve => setTimeout(resolve, remainingMs));
   }
 
-  async function renderEditor(snapshot, windowAudio, cueStartMs, cueEndMs, video) {
+  async function renderEditor(snapshot, windowAudio, cueStartMs, cueEndMs, video, generation) {
     ensureHost();
     const decodeContext = new AudioContext();
     let audioBuffer;
@@ -172,6 +179,7 @@
     } finally {
       await decodeContext.close();
     }
+    if (!enabled || generation !== captureGeneration) return;
     const samples = audioBuffer.getChannelData(0).slice();
     const duration = audioBuffer.duration;
     let trimStart = Math.max(0, (cueStartMs - windowAudio.startTimeMs) / 1000);
@@ -254,7 +262,10 @@
     canvas.addEventListener("pointerup", () => { dragging = null; });
     window.addEventListener("resize", update, { once: true });
 
+    let closed = false;
     const close = (resume = true) => {
+      if (closed) return;
+      closed = true;
       clearInterval(playbackTimer);
       audio.pause();
       URL.revokeObjectURL(playbackUrl);
@@ -262,7 +273,7 @@
       window.removeEventListener("resize", update);
       restoreFocus();
       closeEditor = null;
-      if (resume) video.play().catch(() => {});
+      if (resume && enabled) video.play().catch(() => {});
     };
     const restoreFocus = ConvoLabEditorControls.bindDialog(backdrop, close, cardButton);
     closeEditor = close;
@@ -299,7 +310,7 @@
         const audioBase64 = ConvoLabAudio.arrayBufferToBase64(
           ConvoLabAudio.encodeMonoWav(trimmed, audioBuffer.sampleRate),
         );
-        const result = await send({
+        await send({
           type: "CREATE_MEDIA_CARD",
           cardId,
           imageBase64: picker.imageBase64(),
@@ -310,13 +321,9 @@
           sourceTitle: snapshot.title,
         });
         close();
-        showToast(
-          result.promoted
-            ? "Audio recognition card created at the front of your queue."
-            : "Card created, but ConvoLab could not move it to the front of the queue.",
-          6000,
-        );
+        showToast("Audio recognition card created at the front of your queue.", 6000);
       } catch (error) {
+        if (!backdrop.isConnected) showToast(error.message, 6000);
         errorElement.textContent = error.message;
         errorElement.hidden = false;
         buttons.forEach((button) => { button.disabled = false; });
@@ -352,6 +359,6 @@
     .then((status) => setEnabled(status.enabled))
     .catch(() => {});
   chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === "SET_MEDIA_MODE") setEnabled(message.enabled === true);
+    if (message?.type === "SET_MEDIA_MODE") setEnabled(message.enabled === true, message.discardEditor === true);
   });
 })();

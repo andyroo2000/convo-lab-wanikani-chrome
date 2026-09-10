@@ -9,6 +9,7 @@ async function harness() {
   const values = {};
   const events = {};
   const sent = [];
+  const account = {convoLabAccessToken:"test-token"};
   let tab = {id: 1, url: "https://www.youtube.com/watch?v=example"};
   const listener = name => ({addListener(fn) { events[name] = fn; }});
   globalThis.chrome = {
@@ -17,7 +18,8 @@ async function harness() {
       getContexts: async () => [{}], onMessage: listener("message"),
       sendMessage: async message => { sent.push(message); return {ok:true, result:{audioBase64:"audio"}}; },
     },
-    storage: {session: {
+    offscreen: {closeDocument: async () => sent.push({closed:true})},
+    storage: {local:{get:async () => ({...account})}, onChanged:listener("storage"), session: {
       get: async () => ({...values}),
       set: async update => Object.assign(values, update),
       remove: async key => { delete values[key]; },
@@ -31,7 +33,7 @@ async function harness() {
   const api = await import(`../extension/lib/media-background.js?test=${++harnessId}`);
   api.installMediaMessages();
   const sender = () => ({id:"extension",frameId:0,tab,url:tab.url});
-  return {api, values, events, sent, sender, select: id => {tab = {...tab,id};}};
+  return {api, values, account, events, sent, sender, select: id => {tab = {...tab,id};}};
 }
 
 test("capture transitions stop the previous tab, ignore stale endings, and clear on navigation", async () => {
@@ -41,7 +43,7 @@ test("capture transitions stop the previous tab, ignore stale endings, and clear
   await h.api.startMediaMode();
   assert.ok(h.sent.some(message => message.id === 1 && message.enabled === false));
   assert.equal(h.values[captureKey],2);
-  h.events.message({type:"MEDIA_CAPTURE_ENDED",tabId:1},{url:chrome.runtime.getURL("offscreen.html")},()=>{});
+  h.events.message({type:"MEDIA_CAPTURE_ENDED",tabId:1},{id:"extension",url:chrome.runtime.getURL("offscreen.html")},()=>{});
   await tick();
   assert.equal(h.values[captureKey],2);
   h.events.updated(2,{url:"https://example.com"});
@@ -74,4 +76,46 @@ test("capture can stop immediately while an audio-window operation is still pend
   assert.equal(h.values[captureKey],undefined);
   release({ok:true,result:{audioBase64:"audio"}});
   assert.equal((await audio).ok,true);
+});
+
+test("stopping closes the offscreen document but preserves the editor", async () => {
+  const h = await harness();
+  await h.api.startMediaMode();
+  await h.api.stopMediaMode();
+  assert.ok(h.sent.some(message => message.closed));
+  assert.ok(h.sent.some(message => message.enabled === false && message.discardEditor === false));
+});
+
+test("capture requires authentication and account changes discard stopped-tab drafts", async () => {
+  const h = await harness();
+  delete h.account.convoLabAccessToken;
+  await assert.rejects(h.api.startMediaMode(), /Sign in/);
+  h.events.storage({convoLabAccessToken:{oldValue:"test-token"}}, "local");
+  await tick();
+  assert.ok(h.sent.some(message => message.id === 1 && message.discardEditor));
+});
+
+test("saving a copied clip survives Stop and bypasses a pending recorder operation", async () => {
+  const h = await harness();
+  await h.api.startMediaMode();
+  let release;
+  chrome.runtime.sendMessage = message => message.type === "GET_AUDIO_WINDOW"
+    ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ok:true});
+  const audio = new Promise(resolve => h.events.message({type:"GET_AUDIO_WINDOW",startTimeMs:0,endTimeMs:1000},h.sender(),resolve));
+  await tick();
+  await h.api.stopMediaMode();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({id:"saved"}));
+  try {
+    const result = await new Promise(resolve => h.events.message({
+      type:"CREATE_MEDIA_CARD", cardId:"01ARZ3NDEKTSV4RRFFQ69G5FAV", japanese:"はい。",english:"Yes.",
+      audioBase64:Buffer.alloc(64).toString("base64"), sourceUrl:h.sender().url,
+    },h.sender(),resolve));
+    assert.equal(result.ok,true);
+    assert.equal(result.result.card.id,"saved");
+  } finally {
+    globalThis.fetch = originalFetch;
+    release({ok:true});
+    await audio;
+  }
 });

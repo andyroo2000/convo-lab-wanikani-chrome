@@ -40,5 +40,5 @@ export async function createCapturedAudioCard(message) {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(errorMessage(payload, response.status));
-  return { card: payload, promoted: true };
+  return { card: payload };
 }

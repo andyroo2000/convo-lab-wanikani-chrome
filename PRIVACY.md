@@ -48,6 +48,10 @@ audio-recognition card.
   Stopping capture, leaving the supported site, closing the tab, or signing out
   discards the buffer.
 
+An already open audio editor retains its selected clip and candidate images in
+memory after capture stops, so a failed save can be retried. The draft is cleared
+when the editor or tab closes, or when the ConvoLab account changes or signs out.
+
 The extension does not read, store, or transmit WaniKani answers, Satori Reader
 article content, form values, or credentials for those services. Video capture
 processes subtitle metadata and video images as described above. It does not monitor pages outside the

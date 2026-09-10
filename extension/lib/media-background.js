@@ -33,7 +33,6 @@ async function ensureOffscreenDocument() {
 }
 
 async function sendToOffscreen(message) {
-  await ensureOffscreenDocument();
   const response = await chrome.runtime.sendMessage({ ...message, target: "offscreen" });
   if (!response?.ok) throw new Error(response?.error || "The audio recorder did not respond.");
   return response.result;
@@ -44,19 +43,26 @@ async function capturedTabId() {
   return Number.isInteger(values[MEDIA_CAPTURE_TAB_KEY]) ? values[MEDIA_CAPTURE_TAB_KEY] : null;
 }
 
-async function notifyMediaMode(tabId, enabled) {
+async function notifyMediaMode(tabId, enabled, discardEditor = false) {
   if (!Number.isInteger(tabId)) return;
-  await chrome.tabs.sendMessage(tabId, { type: "SET_MEDIA_MODE", enabled }).catch(() => {});
+  await chrome.tabs.sendMessage(tabId, { type: "SET_MEDIA_MODE", enabled, discardEditor }).catch(() => {});
 }
 
-async function stopCapture(tabId = null) {
+async function stopCapture(tabId = null, discardEditor = false) {
   const resolvedTabId = tabId ?? await capturedTabId();
   await sendToOffscreen({ type: "STOP_MEDIA_CAPTURE" }).catch(() => {});
+  await chrome.offscreen.closeDocument().catch(() => {});
   await chrome.storage.session.remove(MEDIA_CAPTURE_TAB_KEY);
-  await notifyMediaMode(resolvedTabId, false);
+  await notifyMediaMode(resolvedTabId, false, discardEditor);
+}
+
+async function requireCaptureAccount() {
+  const values = await chrome.storage.local.get("convoLabAccessToken");
+  if (!values.convoLabAccessToken) throw new Error("Sign in to ConvoLab before enabling dialogue capture.");
 }
 
 async function startCapture() {
+  await requireCaptureAccount();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !isSupportedMediaURL(tab.url)) {
     throw new Error("Open a Netflix or YouTube video before enabling dialogue capture.");
@@ -88,7 +94,6 @@ async function mediaOperation(message, sender) {
   if (message.type === "GET_MEDIA_MODE_STATE") return { enabled: id === sender.tab.id };
   if (id !== sender.tab.id) throw new Error("Enable dialogue capture for this tab first.");
   if (message.type === "CAPTURE_SCREENSHOT") return captureScreenshot(sender.tab, message);
-  if (message.type === "CREATE_MEDIA_CARD") return createCapturedAudioCard(message);
   validateAudioWindow(message);
   return sendToOffscreen({type: "GET_AUDIO_WINDOW", startTimeMs: message.startTimeMs, endTimeMs: message.endTimeMs});
 }
@@ -102,6 +107,7 @@ function isMediaSender(sender) {
 async function captureEnded(tabId) {
   if (await capturedTabId() !== tabId) return;
   await chrome.storage.session.remove(MEDIA_CAPTURE_TAB_KEY);
+  await chrome.offscreen.closeDocument().catch(() => {});
   await notifyMediaMode(tabId, false);
 }
 
@@ -111,14 +117,17 @@ function handleMediaMessage(message, sender, respond, serialize) {
   }
   if (!isMediaSender(sender)) return false;
   if (!["GET_MEDIA_MODE_STATE", "GET_AUDIO_WINDOW", "CREATE_MEDIA_CARD", "CAPTURE_SCREENSHOT"].includes(message?.type)) return false;
-  serialize(() => mediaOperation(message, sender))
+  // Saving a copied clip is independent of the live recorder and its work queue.
+  const operation = message.type === "CREATE_MEDIA_CARD"
+    ? createCapturedAudioCard(message) : serialize(() => mediaOperation(message, sender));
+  operation
     .then(result => respond({ok: true, result}))
     .catch(error => respond({ok: false, error: error.message}));
   return true;
 }
 
 function handleCaptureEnded(message, sender, serialize) {
-  if (sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)) {
+  if (sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)) {
     serialize(() => captureEnded(message.tabId)).catch(() => {});
   }
   return false;
@@ -132,6 +141,18 @@ function installCaptureLifecycle(serialize) {
   chrome.tabs.onUpdated.addListener((tabId, change) => {
     if (change.url && !isSupportedMediaURL(change.url)) stopTab(tabId);
   });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.convoLabAccessToken) return;
+    serialize(discardAccountMedia).catch(() => {});
+  });
+}
+
+async function discardAccountMedia() {
+  await stopCapture(null, true);
+  // A manually stopped tab may still hold an editor. Never carry that draft across accounts.
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.filter(tab => isSupportedMediaURL(tab.url))
+    .map(tab => notifyMediaMode(tab.id, false, true)));
 }
 
 export function installMediaMessages() {
@@ -143,6 +164,6 @@ export function startMediaMode() {
   return serializeCapture(startCapture);
 }
 
-export function stopMediaMode() {
-  return serializeCapture(() => stopCapture());
+export function stopMediaMode({ discardEditor = false } = {}) {
+  return serializeCapture(() => stopCapture(null, discardEditor));
 }

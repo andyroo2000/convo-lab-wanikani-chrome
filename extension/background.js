@@ -481,7 +481,7 @@ async function signIn(email, password) {
 }
 
 async function signOut() {
-  await stopMediaMode();
+  await stopMediaMode({ discardEditor: true });
   await finishSession();
   await flushPending();
   const values = await stored(TOKEN_KEY);
@@ -610,6 +610,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   };
 
+  // Capture has its own lifecycle queue; slow media work must not delay study-session boundaries.
   const runOperation = ["START_MEDIA_MODE", "STOP_MEDIA_MODE"].includes(message.type)
     ? operation => Promise.resolve().then(operation)
     : serialize;

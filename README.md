@@ -60,6 +60,11 @@ response while the editor remains open; unsent cards are not saved across tab
 closure. Stopping capture, closing the tab, navigating to another site, or
 signing out discards the buffers.
 
+Stopping capture preserves an already open editor so a failed save can be
+retried with the same card ID. Closing the editor or tab discards that draft;
+signing out or changing accounts also clears it. Subtitle text and video
+metadata come from the video page and should be reviewed before creating a card.
+
 See the [privacy policy](PRIVACY.md) for the complete data-handling disclosure.
 
 ## Local development

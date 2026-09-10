@@ -102,7 +102,7 @@ export function isTrustedExtensionPageSender(sender, runtimeId) {
   }
   try {
     const url = new URL(sender.url);
-    return url.protocol === "chrome-extension:" && url.hostname === runtimeId;
+    return url.protocol === "chrome-extension:" && url.hostname === runtimeId && url.pathname === "/popup.html";
   } catch {
     return false;
   }

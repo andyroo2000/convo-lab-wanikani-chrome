@@ -7,6 +7,21 @@ await import("../extension/lib/subtitles.js");
 const audio = globalThis.ConvoLabAudio;
 const subtitles = globalThis.ConvoLabSubtitles;
 
+test("cue windows include padding and cap long or slow subtitles at 60 seconds", () => {
+  assert.deepEqual(audio.cueWindow({start:10,end:12},11,1,100000), {
+    cueStartMs:99000,cueEndMs:101000,startTimeMs:98000,endTimeMs:102000,
+  });
+  for (const rate of [0.5,1,2]) {
+    const window = audio.cueWindow({start:0,end:120},90,rate,100000);
+    assert.equal(window.endTimeMs - window.startTimeMs,60000);
+    assert.ok(window.endTimeMs <= 115000);
+    assert.ok(window.startTimeMs <= 100000);
+  }
+  assert.throws(() => audio.cueWindow({start:0,end:1},0,0,1000),/Invalid/);
+  assert.throws(() => audio.cueWindow({start:NaN,end:1},0,1,1000),/Invalid/);
+  assert.throws(() => audio.cueWindow({start:100,end:120},0,1,1000),/ahead/);
+});
+
 test("parses WebVTT and resolves the active cue", () => {
   const cues = subtitles.parseWebVtt(`WEBVTT
 

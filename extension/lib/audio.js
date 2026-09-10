@@ -1,4 +1,16 @@
 (function installAudioHelpers(root) {
+  function cueWindow(cue, currentTime, playbackRate, now) {
+    const timing = [cue.start, cue.end, currentTime, playbackRate, now];
+    if (!timing.every(Number.isFinite)) throw new Error("Invalid subtitle timing.");
+    if (playbackRate <= 0 || cue.end <= cue.start) throw new Error("Invalid subtitle timing.");
+    const cueStartMs = now + (cue.start - currentTime) / playbackRate * 1000;
+    const cueEndMs = now + (cue.end - currentTime) / playbackRate * 1000;
+    const endTimeMs = Math.min(cueEndMs + 1000, now + 15000);
+    const startTimeMs = Math.max(cueStartMs - 1000, endTimeMs - 60000);
+    if (startTimeMs >= endTimeMs) throw new Error("This subtitle is too far ahead of playback.");
+    return { cueStartMs, cueEndMs, startTimeMs, endTimeMs };
+  }
+
   function encodeMonoWav(samples, sampleRate) {
     const length = samples.length;
     const buffer = new ArrayBuffer(44 + length * 2);
@@ -85,6 +97,7 @@
   }
 
   root.ConvoLabAudio = Object.freeze({
+    cueWindow,
     arrayBufferToBase64,
     base64ToArrayBuffer,
     encodeMonoWav,

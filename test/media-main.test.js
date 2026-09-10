@@ -26,11 +26,34 @@ function playerHarness(hostname, responses, playerResponse = null) {
     },
   });
   context.XMLHttpRequest.prototype.open = () => {};
+  const originalFetch = context.fetch;
+  const originalOpen = context.XMLHttpRequest.prototype.open;
   for (const file of ["lib/subtitles.js", "media-main.js"]) {
     vm.runInContext(readFileSync(new URL(`../extension/${file}`, import.meta.url), "utf8"), context);
   }
-  return { context, updates, enable: (enabled = true) => listeners.get("convolab-media-command")({detail:{enabled}}) };
+  return { context, updates, originalFetch, originalOpen, enable: (enabled = true) => listeners.get("convolab-media-command")({detail:{enabled}}) };
 }
+
+test("network hooks are Netflix-only, opt-in, idempotent, and restored without clobbering page changes", () => {
+  for (const hostname of ["www.netflix.com","www.youtube.com"]) {
+    const h = playerHarness(hostname,new Map());
+    assert.equal(h.context.fetch,h.originalFetch);
+    assert.equal(h.context.XMLHttpRequest.prototype.open,h.originalOpen);
+    h.enable();
+    const installed = h.context.fetch;
+    assert.equal(installed === h.originalFetch,hostname.includes("youtube"));
+    h.enable();
+    assert.equal(h.context.fetch,installed);
+    h.enable(false);
+    assert.equal(h.context.fetch,h.originalFetch);
+    assert.equal(h.context.XMLHttpRequest.prototype.open,h.originalOpen);
+    h.enable();
+    const pageFetch = () => {};
+    h.context.fetch = pageFetch;
+    h.enable(false);
+    assert.equal(h.context.fetch,pageFetch);
+  }
+});
 
 const captions = text => JSON.stringify({events:[{tStartMs:1000,dDurationMs:3000,segs:[{utf8:text}]}]});
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));

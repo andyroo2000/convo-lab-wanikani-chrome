@@ -227,25 +227,40 @@
     }).catch(() => {});
   }
 
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async function convoLabFetch(...args) {
-    const response = await originalFetch.apply(this, args);
-    inspectResponse(typeof args[0] === "string" ? args[0] : args[0]?.url, response);
-    return response;
-  };
+  let restoreNetflixHooks = null;
 
-  const originalOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function convoLabOpen(method, url, ...rest) {
-    this.addEventListener("load", () => {
-      if (!shouldInspectNetflix(url)) return;
-      try {
-        if (typeof this.responseText === "string") inspectNetflixPayload(JSON.parse(this.responseText));
-      } catch {
-        // Netflix may deliver a binary or non-JSON response on similarly named URLs.
-      }
-    }, { once: true });
-    return originalOpen.call(this, method, url, ...rest);
-  };
+  function inspectXhr(xhr, url, generation) {
+    if (!shouldInspectNetflix(url) || !captureIsCurrent(generation)) return;
+    try {
+      if (typeof xhr.responseText === "string") inspectNetflixPayload(JSON.parse(xhr.responseText));
+    } catch {
+      // Similarly named URLs may deliver binary or non-JSON responses.
+    }
+  }
+
+  function installNetflixHooks() {
+    if (restoreNetflixHooks) return;
+    const originalFetch = globalThis.fetch;
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const wrappedFetch = async function (...args) {
+      const generation = state.generation;
+      const response = await originalFetch.apply(this, args);
+      if (captureIsCurrent(generation)) inspectResponse(typeof args[0] === "string" ? args[0] : args[0]?.url, response);
+      return response;
+    };
+    const wrappedOpen = function (method, url, ...rest) {
+      const generation = state.generation;
+      this.addEventListener("load", () => inspectXhr(this, url, generation), { once: true });
+      return originalOpen.call(this, method, url, ...rest);
+    };
+    globalThis.fetch = wrappedFetch;
+    XMLHttpRequest.prototype.open = wrappedOpen;
+    restoreNetflixHooks = () => {
+      if (globalThis.fetch === wrappedFetch) globalThis.fetch = originalFetch;
+      if (XMLHttpRequest.prototype.open === wrappedOpen) XMLHttpRequest.prototype.open = originalOpen;
+      restoreNetflixHooks = null;
+    };
+  }
 
   function publishCurrentCue() {
     if (!state.enabled) return;
@@ -268,28 +283,32 @@
     });
   }
 
+  function clearSubtitleSource() {
+    state.sourceKey = null;
+    state.japanese = [];
+    state.english = [];
+    state.lastPublishedKey = null;
+  }
+
   window.addEventListener(COMMAND_EVENT, (event) => {
     state.enabled = event.detail?.enabled === true;
     if (!state.enabled) {
+      restoreNetflixHooks?.();
       state.generation += 1;
-      state.sourceKey = null;
-      state.japanese = [];
-      state.english = [];
+      clearSubtitleSource();
       state.netflixTracks = [];
-      state.lastPublishedKey = null;
       return;
     }
     if (location.hostname.endsWith("youtube.com")) loadYouTube();
     else {
+      installNetflixHooks();
       dispatch({kind: "availability", available: false, message: "If subtitles do not appear, reopen this Netflix title now that capture is enabled."});
       loadNetflix();
     }
   });
 
   document.addEventListener("yt-navigate-finish", () => {
-    state.sourceKey = null;
-    state.japanese = [];
-    state.english = [];
+    clearSubtitleSource();
     if (state.enabled) loadYouTube();
   });
 
