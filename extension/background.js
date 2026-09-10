@@ -20,12 +20,7 @@ import {
   studySessionPayload,
   trackingTransition,
 } from "./lib/session.js";
-import {
-  base64ToBlob,
-  buildAudioRecognitionCardPayload,
-  createULID,
-  isSupportedMediaURL,
-} from "./lib/card.js";
+import { installMediaMessages, mediaStatus, startMediaMode, stopMediaMode } from "./lib/media-background.js";
 
 const API_BASE_URL = "https://convo-lab.com";
 const TOKEN_KEY = "convoLabAccessToken";
@@ -44,9 +39,6 @@ const MIN_SESSION_MS = 1_000;
 const MAX_PENDING_SESSIONS = 1_000;
 const MAX_FAILED_SESSIONS = 20;
 const MAX_UPLOAD_ATTEMPTS = 3;
-const MEDIA_CAPTURE_TAB_KEY = "convoLabMediaCaptureTabId";
-const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
-const MAX_CAPTURED_AUDIO_BASE64_LENGTH = 14 * 1024 * 1024;
 
 const tabStates = new Map();
 let work = Promise.resolve();
@@ -97,131 +89,6 @@ async function fetchJSON(path, { token, method = "GET", body } = {}) {
     throw error;
   }
   return payload;
-}
-
-async function fetchForm(path, { token, body }) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body,
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const validationMessage = payload?.errors
-      ? Object.values(payload.errors).flat().find((value) => typeof value === "string")
-      : null;
-    const error = new Error(validationMessage || payload?.message || `Request failed (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
-}
-
-async function ensureOffscreenDocument() {
-  const contexts = await chrome.runtime.getContexts({
-    contextTypes: ["OFFSCREEN_DOCUMENT"],
-    documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)],
-  });
-  if (contexts.length) return;
-  await chrome.offscreen.createDocument({
-    url: OFFSCREEN_DOCUMENT_PATH,
-    reasons: ["USER_MEDIA"],
-    justification: "Keep a rolling tab-audio buffer so selected dialogue can be trimmed into a study card.",
-  });
-}
-
-async function sendToOffscreen(message) {
-  await ensureOffscreenDocument();
-  const response = await chrome.runtime.sendMessage({ ...message, target: "offscreen" });
-  if (!response?.ok) throw new Error(response?.error || "The audio recorder did not respond.");
-  return response.result;
-}
-
-async function capturedTabId() {
-  const values = await chrome.storage.session.get(MEDIA_CAPTURE_TAB_KEY);
-  return Number.isInteger(values[MEDIA_CAPTURE_TAB_KEY]) ? values[MEDIA_CAPTURE_TAB_KEY] : null;
-}
-
-async function notifyMediaMode(tabId, enabled) {
-  if (!Number.isInteger(tabId)) return;
-  await chrome.tabs.sendMessage(tabId, { type: "SET_MEDIA_MODE", enabled }).catch(() => {});
-}
-
-async function stopMediaMode(tabId = null) {
-  const resolvedTabId = tabId ?? await capturedTabId();
-  await sendToOffscreen({ type: "STOP_MEDIA_CAPTURE" }).catch(() => {});
-  await chrome.storage.session.remove(MEDIA_CAPTURE_TAB_KEY);
-  await notifyMediaMode(resolvedTabId, false);
-}
-
-async function startMediaMode() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !isSupportedMediaURL(tab.url)) {
-    throw new Error("Open a Netflix or YouTube video before enabling dialogue capture.");
-  }
-  const previousTabId = await capturedTabId();
-  if (previousTabId && previousTabId !== tab.id) await stopMediaMode(previousTabId);
-  await ensureOffscreenDocument();
-  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
-  await sendToOffscreen({ type: "START_MEDIA_CAPTURE", streamId, tabId: tab.id });
-  await chrome.storage.session.set({ [MEDIA_CAPTURE_TAB_KEY]: tab.id });
-  await notifyMediaMode(tab.id, true);
-  return status();
-}
-
-async function createCapturedAudioCard(message) {
-  const values = await stored([TOKEN_KEY]);
-  const token = values[TOKEN_KEY];
-  if (!token) throw new Error("Sign in to ConvoLab before creating a card.");
-  if (
-    typeof message.audioBase64 !== "string"
-    || message.audioBase64.length < 60
-    || message.audioBase64.length > MAX_CAPTURED_AUDIO_BASE64_LENGTH
-  ) {
-    throw new Error("The captured audio is invalid or too large.");
-  }
-  if (!isSupportedMediaURL(message.sourceUrl)) throw new Error("The card source is not supported.");
-  const cardId = createULID();
-  const cardPayload = buildAudioRecognitionCardPayload({
-    id: cardId,
-    japanese: message.japanese,
-    english: message.english,
-    sourceUrl: message.sourceUrl,
-    sourceTitle: message.sourceTitle,
-  });
-  const card = await fetchJSON("/api/study/cards", {
-    token,
-    method: "POST",
-    body: cardPayload,
-  });
-  let withAudio;
-  try {
-    const form = new FormData();
-    form.append("audio", base64ToBlob(message.audioBase64), `convolab-${cardId.toLowerCase()}.wav`);
-    withAudio = await fetchForm(`/api/study/cards/${encodeURIComponent(card.syncId || cardId)}/audio`, {
-      token,
-      body: form,
-    });
-  } catch (error) {
-    await fetchJSON(`/api/study/cards/${encodeURIComponent(card.syncId || cardId)}`, {
-      token,
-      method: "DELETE",
-    }).catch(() => {});
-    throw error;
-  }
-  let promoted = true;
-  try {
-    await fetchJSON(`/api/study/new-queue/${encodeURIComponent(withAudio.syncId || card.syncId || cardId)}/promote`, {
-      token,
-      method: "POST",
-    });
-  } catch {
-    promoted = false;
-  }
-  return { card: withAudio, promoted };
 }
 
 function requestHeaders(token, body) {
@@ -639,8 +506,6 @@ async function status() {
     TRACKING_ERROR_KEY,
   ]);
   const active = values[ACTIVE_KEY];
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const mediaCaptureTabId = await capturedTabId();
   const queueStatus = storedQueueStatus(values);
   return {
     signedIn: Boolean(values[TOKEN_KEY]),
@@ -652,8 +517,7 @@ async function status() {
     pendingCount: queueStatus.pendingCount,
     failedCount: queueStatus.failedCount,
     error: values[TRACKING_ERROR_KEY] || values[ERROR_KEY] || null,
-    mediaSupported: Boolean(activeTab?.id && isSupportedMediaURL(activeTab.url)),
-    mediaCaptureActive: Boolean(activeTab?.id && mediaCaptureTabId === activeTab.id),
+    ...await mediaStatus(),
   };
 }
 
@@ -719,59 +583,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  const supportedMediaSender = Boolean(
-    sender.tab?.id
-    && isSupportedMediaURL(sender.tab.url)
-  );
-  if (
-    supportedMediaSender
-    && ["GET_MEDIA_MODE_STATE", "GET_AUDIO_WINDOW", "CREATE_MEDIA_CARD"].includes(message.type)
-  ) {
-    const mediaOperation = async () => {
-      const activeTabId = await capturedTabId();
-      if (message.type === "GET_MEDIA_MODE_STATE") {
-        return { enabled: activeTabId === sender.tab.id };
-      }
-      if (activeTabId !== sender.tab.id) {
-        throw new Error("Enable dialogue capture for this tab first.");
-      }
-      if (message.type === "GET_AUDIO_WINDOW") {
-        if (
-          !Number.isFinite(message.startTimeMs)
-          || !Number.isFinite(message.endTimeMs)
-          || message.endTimeMs <= message.startTimeMs
-          || message.endTimeMs - message.startTimeMs > 60_000
-        ) {
-          throw new Error("The requested audio window is invalid.");
-        }
-        return sendToOffscreen({
-          type: "GET_AUDIO_WINDOW",
-          startTimeMs: message.startTimeMs,
-          endTimeMs: message.endTimeMs,
-        });
-      }
-      return createCapturedAudioCard(message);
-    };
-    serialize(mediaOperation)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-
-  if (
-    message.type === "MEDIA_CAPTURE_ENDED"
-    && sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)
-  ) {
-    const endedTabId = message.tabId;
-    serialize(async () => {
-      if (await capturedTabId() === endedTabId) {
-        await chrome.storage.session.remove(MEDIA_CAPTURE_TAB_KEY);
-        await notifyMediaMode(endedTabId, false);
-      }
-    }).catch(() => {});
-    return false;
-  }
-
   if (!isTrustedExtensionPageSender(sender, chrome.runtime.id)) {
     return false;
   }
@@ -789,7 +600,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await flushPending();
         return status();
       case "START_MEDIA_MODE":
-        return startMediaMode();
+        await startMediaMode();
+        return status();
       case "STOP_MEDIA_MODE":
         await stopMediaMode();
         return status();
@@ -835,9 +647,6 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.tabs.onActivated.addListener(() => runTracking(() => reconcile()));
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabStates.delete(tabId);
-  capturedTabId().then((captureTabId) => {
-    if (captureTabId === tabId) stopMediaMode(tabId).catch(() => {});
-  });
   runTracking(() => reconcile());
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -872,6 +681,7 @@ async function initialize() {
   await flushPending();
 }
 
+installMediaMessages(serialize);
 runTracking(initialize);
 
 export {

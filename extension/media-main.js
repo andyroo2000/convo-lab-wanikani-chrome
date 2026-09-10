@@ -41,12 +41,10 @@
   }
 
   function trackName(track) {
-    return track?.name?.simpleText
-      || track?.name?.runs?.map((run) => run.text).join("")
-      || track?.languageDescription
-      || track?.language
-      || track?.bcp47
-      || "Subtitle";
+    const name = track?.name || {};
+    const runs = Array.isArray(name.runs) ? name.runs.map(run => run.text).join("") : "";
+    return [name.simpleText, runs, ...["languageDescription", "language", "bcp47"].map(key => track?.[key])]
+      .find(Boolean) || "Subtitle";
   }
 
   async function fetchYouTubeTrack(track, translatedLanguage = null) {
@@ -58,64 +56,81 @@
     return helpers.parseYouTubeJson3(await response.text());
   }
 
+  function youtubeSource() {
+    const response = playerResponse();
+    const sourceKey = response?.videoDetails?.videoId || new URL(location.href).searchParams.get("v");
+    const tracks = youtubeCaptionTracks(response);
+    if (!sourceKey || !Array.isArray(tracks)) return null;
+    if (!tracks.length) return null;
+    return {sourceKey, tracks};
+  }
+
+  function youtubeCaptionTracks(response) {
+    return response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  }
+
+  function japaneseYoutubeTrack(tracks) {
+    return helpers.selectLanguageTrack(tracks, "ja")
+      || tracks.find(track => String(track.vssId || "").includes(".ja"));
+  }
+
+  function englishYoutubeTrack(englishTrack, japaneseTrack) {
+    if (englishTrack) return fetchYouTubeTrack(englishTrack);
+    if (japaneseTrack.isTranslatable === false) return Promise.resolve([]);
+    return fetchYouTubeTrack(japaneseTrack, "en");
+  }
+
+  function publishLoadedTracks(sourceKey, japanese, english, label) {
+    state.sourceKey = sourceKey;
+    state.japanese = japanese;
+    state.english = english;
+    state.lastPublishedKey = null;
+    dispatch({
+      kind: "availability",
+      available: japanese.length > 0,
+      message: english.length ? label : "Japanese subtitles found; English subtitles are unavailable.",
+    });
+  }
+
+  async function loadYouTubePair(source) {
+    const japaneseTrack = japaneseYoutubeTrack(source.tracks);
+    if (!japaneseTrack) throw new Error("This video has no Japanese subtitle track.");
+    const englishTrack = helpers.selectLanguageTrack(source.tracks, "en");
+    const [japanese, english] = await Promise.all([
+      fetchYouTubeTrack(japaneseTrack),
+      englishYoutubeTrack(englishTrack, japaneseTrack).catch(() => []),
+    ]);
+    if (youtubeSource()?.sourceKey !== source.sourceKey) return;
+    const englishName = englishTrack ? trackName(englishTrack) : "English translation";
+    publishLoadedTracks(source.sourceKey, japanese, english, `${trackName(japaneseTrack)} + ${englishName}`);
+  }
+
+  function alreadyLoaded(key) {
+    return state.sourceKey === key && state.japanese.length > 0;
+  }
+
   async function loadYouTube() {
     if (state.loading) return;
-    const response = playerResponse();
-    const details = response?.videoDetails;
-    const tracks = response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    const sourceKey = details?.videoId || new URL(location.href).searchParams.get("v");
-    if (!sourceKey || !Array.isArray(tracks) || tracks.length === 0) return;
-    if (state.sourceKey === sourceKey && state.japanese.length) return;
-
+    const source = youtubeSource();
+    if (!source || alreadyLoaded(source.sourceKey)) return;
     state.loading = true;
     try {
-      const japaneseTrack = helpers.selectLanguageTrack(tracks, "ja")
-        || tracks.find((track) => String(track.vssId || "").includes(".ja"));
-      if (!japaneseTrack) {
-        dispatch({ kind: "availability", available: false, message: "This video has no Japanese subtitle track." });
-        return;
-      }
-      const englishTrack = helpers.selectLanguageTrack(tracks, "en");
-      const [japanese, english] = await Promise.all([
-        fetchYouTubeTrack(japaneseTrack),
-        englishTrack
-          ? fetchYouTubeTrack(englishTrack)
-          : japaneseTrack.isTranslatable !== false
-            ? fetchYouTubeTrack(japaneseTrack, "en")
-            : Promise.resolve([]),
-      ]);
-      state.sourceKey = sourceKey;
-      state.japanese = japanese;
-      state.english = english;
-      state.lastPublishedKey = null;
-      dispatch({
-        kind: "availability",
-        available: japanese.length > 0,
-        message: english.length
-          ? `${trackName(japaneseTrack)} + ${englishTrack ? trackName(englishTrack) : "English translation"}`
-          : "Japanese subtitles found; English subtitles are unavailable.",
-      });
+      await loadYouTubePair(source);
     } catch (error) {
-      dispatch({ kind: "availability", available: false, message: error.message });
+      dispatch({kind: "availability", available: false, message: error.message});
     } finally {
       state.loading = false;
     }
   }
 
-  function walkForNetflixTracks(value, found = []) {
-    if (!value || typeof value !== "object") return found;
-    if (Array.isArray(value)) {
-      for (const item of value) walkForNetflixTracks(item, found);
-      return found;
-    }
-    for (const [key, child] of Object.entries(value)) {
-      if (key.toLowerCase() === "timedtexttracks" && Array.isArray(child)) {
-        found.push(...child);
-      } else if (child && typeof child === "object") {
-        walkForNetflixTracks(child, found);
-      }
-    }
-    return found;
+  function walkForNetflixTracks(value) {
+    if (!value || typeof value !== "object") return [];
+    return Object.entries(value).flatMap(netflixTrackEntry);
+  }
+
+  function netflixTrackEntry([key, value]) {
+    if (key.toLowerCase() === "timedtexttracks" && Array.isArray(value)) return value;
+    return walkForNetflixTracks(value);
   }
 
   function downloadUrls(value, output = []) {
@@ -126,16 +141,23 @@
   }
 
   function normalizeNetflixTracks(payload) {
-    return walkForNetflixTracks(payload).flatMap((track) => {
-      if (track?.isNoneTrack) return [];
-      const urls = [...new Set(downloadUrls(track?.ttDownloadables || track?.downloadUrls || track?.urls))];
-      if (!urls.length) return [];
-      return [{
-        ...track,
-        languageCode: track.bcp47 || track.language || track.lang,
-        subtitleUrl: urls.find((url) => /webvtt|\.vtt(?:\?|$)/i.test(url)) || urls[0],
-      }];
-    });
+    return walkForNetflixTracks(payload).flatMap(normalizeNetflixTrack);
+  }
+
+  function normalizeNetflixTrack(track) {
+    if (track?.isNoneTrack) return [];
+    const downloadables = ["ttDownloadables", "downloadUrls", "urls"].map(key => track?.[key]).find(Boolean);
+    const urls = [...new Set(downloadUrls(downloadables))];
+    if (!urls.length) return [];
+    return [{
+      ...track,
+      languageCode: helpers.languageCode(track),
+      subtitleUrl: preferredSubtitleUrl(urls),
+    }];
+  }
+
+  function preferredSubtitleUrl(urls) {
+    return urls.find(url => /webvtt|[.]vtt(?:[?]|$)/i.test(url)) || urls[0];
   }
 
   async function inspectNetflixPayload(payload) {
@@ -168,24 +190,14 @@
       return;
     }
     const sourceKey = `${japaneseTrack.subtitleUrl}|${englishTrack?.subtitleUrl || ""}`;
-    if (state.sourceKey === sourceKey && state.japanese.length) return;
+    if (alreadyLoaded(sourceKey)) return;
     state.loading = true;
     try {
       const [japanese, english] = await Promise.all([
         fetchNetflixTrack(japaneseTrack),
         englishTrack ? fetchNetflixTrack(englishTrack) : Promise.resolve([]),
       ]);
-      state.sourceKey = sourceKey;
-      state.japanese = japanese;
-      state.english = english;
-      state.lastPublishedKey = null;
-      dispatch({
-        kind: "availability",
-        available: japanese.length > 0,
-        message: english.length
-          ? `${trackName(japaneseTrack)} + ${trackName(englishTrack)}`
-          : "Japanese subtitles found; English subtitles are unavailable.",
-      });
+      publishLoadedTracks(sourceKey, japanese, english, `${trackName(japaneseTrack)} + ${trackName(englishTrack)}`);
     } catch (error) {
       dispatch({ kind: "availability", available: false, message: error.message });
     } finally {
@@ -259,7 +271,7 @@
   setInterval(() => {
     if (!state.enabled) return;
     if (location.hostname.endsWith("youtube.com")) loadYouTube();
-    else if (!state.japanese.length) loadNetflix();
+    else loadNetflix();
     publishCurrentCue();
   }, 250);
 })();

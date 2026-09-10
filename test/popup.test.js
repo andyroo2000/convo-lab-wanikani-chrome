@@ -54,7 +54,7 @@ test("manifest and popup disclose study tracking and media mining services", () 
   assert.ok(manifest.permissions.includes("tabCapture"));
   assert.ok(manifest.permissions.includes("offscreen"));
   assert.match(popupHTML, /WaniKani review and Satori Reader time/);
-  assert.match(popupHTML, /Dialogue text and trimmed audio are sent/);
+  assert.match(popupHTML, /Selected dialogue, audio, and an optional screenshot are sent/);
   assert.match(popupHTML, /Enable on this tab/);
 });
 

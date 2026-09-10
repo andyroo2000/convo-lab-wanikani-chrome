@@ -35,7 +35,7 @@ test("parses YouTube json3 caption events", () => {
 
 test("trims mono samples and applies optional edge fades", () => {
   const samples = new Float32Array(100).fill(1);
-  const trimmed = audio.trimAndFade(samples, 100, 0.1, 0.9, {
+  const trimmed = audio.trimAndFade(samples, 100, { start: 0.1, end: 0.9 }, {
     fadeIn: true,
     fadeOut: true,
     fadeSeconds: 0.1,

@@ -32,32 +32,35 @@
     return hours * 3600 + minutes * 60 + seconds;
   }
 
+  function cueList(start, end, text) {
+    if (start === null || end === null) return [];
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+    if (end <= start || !text) return [];
+    return [{start, end, text}];
+  }
+
+  function vttBlock(block) {
+    const lines = block.split("\n").filter(Boolean);
+    const timingIndex = lines.findIndex(line => line.includes("-->"));
+    if (timingIndex < 0) return [];
+    const [rawStart, rawEnd] = lines[timingIndex].split("-->");
+    const start = parseClock(rawStart);
+    const end = parseClock(rawEnd.trim().split(/\s+/)[0]);
+    return cueList(start, end, normalizeText(lines.slice(timingIndex + 1).join("\n")));
+  }
+
   function parseWebVtt(value) {
-    const blocks = String(value || "").replaceAll("\r\n", "\n").split(/\n{2,}/);
-    const cues = [];
-    for (const block of blocks) {
-      const lines = block.split("\n").filter(Boolean);
-      const timingIndex = lines.findIndex((line) => line.includes("-->"));
-      if (timingIndex < 0) continue;
-      const [rawStart, rawEndWithSettings] = lines[timingIndex].split("-->");
-      const start = parseClock(rawStart);
-      const end = parseClock(rawEndWithSettings?.trim().split(/\s+/)[0]);
-      const text = normalizeText(lines.slice(timingIndex + 1).join("\n"));
-      if (start !== null && end !== null && end > start && text) {
-        cues.push({ start, end, text });
-      }
-    }
-    return cues;
+    return String(value || "").replaceAll("\r\n", "\n").split(/\n{2,}/).flatMap(vttBlock);
   }
 
   function parseTtmlTime(value, tickRate = 10_000_000, frameRate = 30) {
     const raw = String(value || "").trim();
     if (!raw) return null;
-    if (/^\d+(?:\.\d+)?t$/i.test(raw)) return Number(raw.slice(0, -1)) / tickRate;
-    if (/^\d+(?:\.\d+)?ms$/i.test(raw)) return Number(raw.slice(0, -2)) / 1000;
-    if (/^\d+(?:\.\d+)?s$/i.test(raw)) return Number(raw.slice(0, -1));
-    if (/^\d+(?:\.\d+)?m$/i.test(raw)) return Number(raw.slice(0, -1)) * 60;
-    if (/^\d+(?:\.\d+)?h$/i.test(raw)) return Number(raw.slice(0, -1)) * 3600;
+    const offset = raw.match(/^(\d+(?:\.\d+)?)(t|ms|s|m|h)$/i);
+    if (offset) {
+      const scales = {t: 1 / tickRate, ms: 0.001, s: 1, m: 60, h: 3600};
+      return Number(offset[1]) * scales[offset[2].toLowerCase()];
+    }
     const frameMatch = raw.match(/^(\d+):(\d+):(\d+):(\d+)$/);
     if (frameMatch) {
       return Number(frameMatch[1]) * 3600
@@ -75,40 +78,40 @@
     const rootNode = documentNode.documentElement;
     const tickRate = Number(rootNode.getAttribute("ttp:tickRate") || rootNode.getAttribute("tickRate")) || 10_000_000;
     const frameRate = Number(rootNode.getAttribute("ttp:frameRate") || rootNode.getAttribute("frameRate")) || 30;
-    return [...documentNode.querySelectorAll("p")].flatMap((node) => {
-      const start = parseTtmlTime(node.getAttribute("begin"), tickRate, frameRate);
-      let end = parseTtmlTime(node.getAttribute("end"), tickRate, frameRate);
-      if (end === null) {
-        const duration = parseTtmlTime(node.getAttribute("dur"), tickRate, frameRate);
-        if (start !== null && duration !== null) end = start + duration;
-      }
-      const text = normalizeText(node.innerHTML || node.textContent);
-      return start !== null && end !== null && end > start && text
-        ? [{ start, end, text }]
-        : [];
-    });
+    return [...documentNode.querySelectorAll("p")].flatMap(node => ttmlCue(node, tickRate, frameRate));
+  }
+
+  function ttmlCue(node, tickRate, frameRate) {
+    const start = parseTtmlTime(node.getAttribute("begin"), tickRate, frameRate);
+    const end = ttmlEnd(node, {start, tickRate, frameRate});
+    return cueList(start, end, normalizeText(node.innerHTML || node.textContent));
+  }
+
+  function ttmlEnd(node, timing) {
+    const end = parseTtmlTime(node.getAttribute("end"), timing.tickRate, timing.frameRate);
+    if (end !== null) return end;
+    const duration = parseTtmlTime(node.getAttribute("dur"), timing.tickRate, timing.frameRate);
+    if (timing.start === null || duration === null) return null;
+    return timing.start + duration;
+  }
+
+  function jsonPayload(value) {
+    if (typeof value !== "string") return value;
+    try { return JSON.parse(value); } catch { return null; }
+  }
+
+  function jsonCue(event) {
+    const segments = Array.isArray(event.segs) ? event.segs : [];
+    const text = normalizeText(segments.map(segment => segment.utf8 || "").join(""));
+    const start = Number(event.tStartMs) / 1000;
+    const end = start + Number(event.dDurationMs) / 1000;
+    return cueList(start, end, text);
   }
 
   function parseYouTubeJson3(value) {
-    let payload = value;
-    if (typeof value === "string") {
-      try {
-        payload = JSON.parse(value);
-      } catch {
-        return [];
-      }
-    }
-    if (!payload || !Array.isArray(payload.events)) return [];
-    return payload.events.flatMap((event) => {
-      const start = Number(event.tStartMs) / 1000;
-      const duration = Number(event.dDurationMs) / 1000;
-      const text = normalizeText(
-        Array.isArray(event.segs) ? event.segs.map((segment) => segment.utf8 || "").join("") : "",
-      );
-      return Number.isFinite(start) && Number.isFinite(duration) && duration > 0 && text
-        ? [{ start, end: start + duration, text }]
-        : [];
-    });
+    const payload = jsonPayload(value);
+    if (!Array.isArray(payload?.events)) return [];
+    return payload.events.flatMap(jsonCue);
   }
 
   function activeCue(cues, currentTime) {
@@ -126,7 +129,9 @@
   }
 
   function languageCode(track) {
-    return String(track?.languageCode || track?.bcp47 || track?.language || track?.lang || "").toLowerCase();
+    if (!track) return "";
+    const value = ["languageCode", "bcp47", "language", "lang"].map(key => track[key]).find(Boolean);
+    return String(value || "").toLowerCase();
   }
 
   function selectLanguageTrack(tracks, language) {

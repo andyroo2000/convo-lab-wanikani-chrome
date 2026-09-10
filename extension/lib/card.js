@@ -36,9 +36,7 @@ export function buildAudioRecognitionCardPayload({ id, japanese, english, source
   const expression = String(japanese || "").trim();
   const meaning = String(english || "").trim();
   if (!expression || !meaning) throw new Error("Japanese dialogue and English meaning are required.");
-  const source = [String(sourceTitle || "").trim().slice(0, 500), String(sourceUrl || "").trim().slice(0, 2048)]
-    .filter(Boolean)
-    .join(" — ");
+  const source = captureSource(sourceTitle, sourceUrl);
   return {
     id,
     creationKind: "audio-recognition",
@@ -51,6 +49,11 @@ export function buildAudioRecognitionCardPayload({ id, japanese, english, source
       ...(source ? { notes: `Captured from ${source}` } : {}),
     },
   };
+}
+
+function captureSource(title, url) {
+  return [String(title || "").trim().slice(0, 500), String(url || "").trim().slice(0, 2048)]
+    .filter(Boolean).join(" — ");
 }
 
 export function base64ToBlob(value, type = "audio/wav") {

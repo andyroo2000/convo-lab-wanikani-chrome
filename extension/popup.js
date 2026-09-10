@@ -53,6 +53,10 @@ function render(status) {
   if (status.failedCount) {
     pendingLabel.textContent += ` ${status.failedCount} session${status.failedCount === 1 ? "" : "s"} could not be synced.`;
   }
+  renderMediaTools(status);
+}
+
+function renderMediaTools(status) {
   mediaCaptureActive = status.mediaCaptureActive;
   mediaTools.hidden = !status.mediaSupported;
   toggleMediaButton.textContent = mediaCaptureActive
@@ -61,7 +65,7 @@ function render(status) {
   toggleMediaButton.classList.toggle("secondary", mediaCaptureActive);
   mediaHelp.textContent = mediaCaptureActive
     ? "Dual subtitles are on. Use + Card beside a Japanese subtitle to trim and save its audio."
-    : "Show Japanese and English subtitles and keep a private rolling audio buffer for card creation.";
+    : "Show dual subtitles and temporarily keep audio and video stills for cards. Only your selected clip and optional image are uploaded.";
 }
 
 signInForm.addEventListener("submit", async (event) => {
@@ -81,27 +85,19 @@ signInForm.addEventListener("submit", async (event) => {
   }
 });
 
-syncButton.addEventListener("click", async () => {
+async function runCommand(type) {
   setBusy(true);
   try {
-    render(await send({ type: "SYNC_NOW" }));
+    render(await send({ type }));
   } catch (error) {
     showError(error.message);
   } finally {
     setBusy(false);
   }
-});
+}
 
-signOutButton.addEventListener("click", async () => {
-  setBusy(true);
-  try {
-    render(await send({ type: "SIGN_OUT" }));
-  } catch (error) {
-    showError(error.message);
-  } finally {
-    setBusy(false);
-  }
-});
+syncButton.addEventListener("click", () => runCommand("SYNC_NOW"));
+signOutButton.addEventListener("click", () => runCommand("SIGN_OUT"));
 
 toggleMediaButton.addEventListener("click", async () => {
   setBusy(true);

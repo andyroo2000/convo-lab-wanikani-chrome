@@ -36,10 +36,21 @@ audio-recognition card.
   uploaded, and only after the user selects **Create at front of queue**. The
   buffer is discarded when capture stops, the tab closes, or the user signs
   out.
+- **Temporary video screenshots.** While dialogue capture is enabled, the
+  extension samples still images of the visible video, cropping browser-tab
+  screenshots to the video bounds when direct frame capture is unavailable.
+  The uncropped tab image is processed transiently for cropping and is never
+  retained in the rolling buffer or uploaded.
+  Up to three minutes of cropped images are kept in memory, capped at 16 MiB
+  of encoded image data. They are not written to Chrome storage. The editor
+  presents frames from the selected audio span. No image is selected by
+  default; only the explicitly chosen image is uploaded with the card.
+  Stopping capture, leaving the supported site, closing the tab, or signing out
+  discards the buffer.
 
 The extension does not read, store, or transmit WaniKani answers, Satori Reader
-article content, unrelated Netflix or YouTube page content, form values, or
-credentials for those services. It does not monitor pages outside the
+article content, form values, or credentials for those services. Video capture
+processes subtitle metadata and video images as described above. It does not monitor pages outside the
 WaniKani, Satori Reader, Netflix, YouTube, and ConvoLab origins declared in its
 manifest.
 
@@ -70,7 +81,7 @@ account. For privacy questions or requests concerning ConvoLab account data,
 use the developer contact information on the extension's Chrome Web Store
 listing.
 
-Selected subtitle text, source metadata, and trimmed audio clips used to create
+Selected subtitle text, source metadata, chosen screenshots, and trimmed audio clips used to create
 cards are retained with those cards in the user's ConvoLab account until the
 user deletes them.
 

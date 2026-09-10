@@ -5,6 +5,7 @@
   "version": "0.3.0",
   "minimum_chrome_version": "120",
   "permissions": [
+    "activeTab",
     "alarms",
     "idle",
     "offscreen",
@@ -73,6 +74,8 @@
       ],
       "js": [
         "lib/audio.js",
+        "lib/screenshot-buffer.js",
+        "lib/screenshot-picker.js",
         "media-content.js"
       ],
       "css": [

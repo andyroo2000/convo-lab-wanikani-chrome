@@ -47,26 +47,25 @@
     return bytes.buffer;
   }
 
-  function trimAndFade(samples, sampleRate, startSeconds, endSeconds, options = {}) {
-    const start = Math.max(0, Math.floor(startSeconds * sampleRate));
-    const end = Math.min(samples.length, Math.ceil(endSeconds * sampleRate));
+  function trimAndFade(samples, sampleRate, range, options = {}) {
+    const start = Math.max(0, Math.floor(range.start * sampleRate));
+    const end = Math.min(samples.length, Math.ceil(range.end * sampleRate));
     if (end <= start) throw new Error("The audio selection is empty.");
     const output = samples.slice(start, end);
     const fadeSamples = Math.min(
       Math.floor((options.fadeSeconds ?? 0.025) * sampleRate),
       Math.floor(output.length / 2),
     );
-    if (options.fadeIn) {
-      for (let index = 0; index < fadeSamples; index += 1) {
-        output[index] *= index / fadeSamples;
-      }
-    }
-    if (options.fadeOut) {
-      for (let index = 0; index < fadeSamples; index += 1) {
-        output[output.length - 1 - index] *= index / fadeSamples;
-      }
-    }
+    if (options.fadeIn) applyFade(output, fadeSamples, false);
+    if (options.fadeOut) applyFade(output, fadeSamples, true);
     return output;
+  }
+
+  function applyFade(output, count, reverse) {
+    for (let index = 0; index < count; index += 1) {
+      const position = reverse ? output.length - 1 - index : index;
+      output[position] *= index / count;
+    }
   }
 
   function waveformPeaks(samples, bins) {

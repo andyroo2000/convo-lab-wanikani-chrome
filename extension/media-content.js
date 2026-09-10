@@ -9,6 +9,7 @@
   let englishLine = null;
   let cardButton = null;
   let toastTimer = null;
+  const screenshots = ConvoLabScreenshots.createBuffer(send);
 
   async function send(message) {
     const response = await chrome.runtime.sendMessage(message);
@@ -60,6 +61,7 @@
     ensureHost();
     document.body?.classList.toggle("convolab-media-enabled", enabled);
     if (!enabled) {
+      screenshots.clear();
       subtitleBox.hidden = true;
       host.querySelector(".convolab-editor-backdrop")?.remove();
     }
@@ -133,12 +135,7 @@
     const cueEndMs = now + (snapshot.japanese.end - video.currentTime) / rate * 1000;
     cardButton.disabled = true;
     try {
-      const remainingMs = Math.max(0, Math.min(15_000, cueEndMs - now + 150));
-      if (remainingMs > 150) {
-        showToast("Finishing this line before opening the audio editor…", remainingMs + 1000);
-        if (video.paused) await video.play();
-        await new Promise((resolve) => setTimeout(resolve, remainingMs));
-      }
+      await finishCue(video, cueEndMs - now);
       video.pause();
       const windowAudio = await send({
         type: "GET_AUDIO_WINDOW",
@@ -152,6 +149,14 @@
     } finally {
       cardButton.disabled = false;
     }
+  }
+
+  async function finishCue(video, milliseconds) {
+    const remainingMs = Math.max(0, Math.min(15_000, milliseconds + 150));
+    if (remainingMs <= 150) return;
+    showToast("Finishing this line before opening the audio editor…", remainingMs + 1000);
+    if (video.paused) await video.play();
+    await new Promise(resolve => setTimeout(resolve, remainingMs));
   }
 
   async function renderEditor(snapshot, windowAudio, cueStartMs, cueEndMs, video) {
@@ -174,6 +179,7 @@
       trimEnd = Math.min(duration, duration / 2 + 1.5);
     }
 
+    const cardId = captureId();
     const backdrop = document.createElement("div");
     backdrop.className = "convolab-editor-backdrop";
     backdrop.innerHTML = `
@@ -188,6 +194,7 @@
           <label><input type="checkbox" name="fadeIn" checked> Fast fade-in</label>
           <label><input type="checkbox" name="fadeOut" checked> Fast fade-out</label>
         </div>
+        <section class="convolab-screenshot-picker"></section>
         <p class="convolab-editor-error" role="alert" hidden></p>
         <div class="convolab-editor-actions">
           <button type="button" class="secondary" data-preview>Play selection</button>
@@ -202,6 +209,7 @@
     japaneseInput.value = snapshot.japanese.text;
     englishInput.value = snapshot.english?.text || "";
     host.append(backdrop);
+    const picker = ConvoLabScreenshotPicker.createPicker(backdrop.querySelector(".convolab-screenshot-picker"), screenshots.frames(), windowAudio.startTimeMs);
 
     const playbackUrl = URL.createObjectURL(wavBlob(windowAudio.audioBase64));
     const audio = new Audio(playbackUrl);
@@ -209,6 +217,7 @@
     const peaks = ConvoLabAudio.waveformPeaks(samples, 480);
     const update = () => {
       drawWaveform(canvas, peaks, trimStart / duration, trimEnd / duration);
+      picker.update(trimStart, trimEnd);
       backdrop.querySelector("[data-start]").textContent = `Start ${trimStart.toFixed(2)}s`;
       backdrop.querySelector("[data-duration]").textContent = `${(trimEnd - trimStart).toFixed(2)}s selected`;
       backdrop.querySelector("[data-end]").textContent = `End ${trimEnd.toFixed(2)}s`;
@@ -262,8 +271,7 @@
         const trimmed = ConvoLabAudio.trimAndFade(
           samples,
           audioBuffer.sampleRate,
-          trimStart,
-          trimEnd,
+          { start: trimStart, end: trimEnd },
           {
             fadeIn: backdrop.querySelector("[name='fadeIn']").checked,
             fadeOut: backdrop.querySelector("[name='fadeOut']").checked,
@@ -274,6 +282,8 @@
         );
         const result = await send({
           type: "CREATE_MEDIA_CARD",
+          cardId,
+          imageBase64: picker.imageBase64(),
           japanese,
           english,
           audioBase64,
@@ -294,6 +304,17 @@
       }
     });
   }
+
+  function captureId() {
+    const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let value = BigInt(Date.now());
+    for (const byte of crypto.getRandomValues(new Uint8Array(10))) value = (value << 8n) | BigInt(byte);
+    let id = "";
+    for (let i = 0; i < 26; i += 1) { id = alphabet[Number(value & 31n)] + id; value >>= 5n; }
+    return id;
+  }
+
+  setInterval(() => { if (enabled) screenshots.sample(videoElement()); }, 1200);
 
   window.addEventListener(UPDATE_EVENT, (event) => {
     if (!enabled || !event.detail) return;

@@ -78,6 +78,16 @@
     if (requestedEnd <= requestedStart) throw new Error("That dialogue is outside the rolling audio buffer.");
     const length = Math.ceil((requestedEnd - requestedStart) / 1000 * sampleRate);
     const samples = new Float32Array(length);
+    copyWindowSamples(samples, requestedStart, requestedEnd);
+    return {
+      audioBase64: ConvoLabAudio.arrayBufferToBase64(ConvoLabAudio.encodeMonoWav(samples, sampleRate)),
+      sampleRate,
+      startTimeMs: requestedStart,
+      endTimeMs: requestedEnd,
+    };
+  }
+
+  function copyWindowSamples(samples, requestedStart, requestedEnd) {
     for (const chunk of chunks) {
       const chunkEnd = chunk.startTimeMs + chunk.samples.length / sampleRate * 1000;
       if (chunkEnd <= requestedStart || chunk.startTimeMs >= requestedEnd) continue;
@@ -86,12 +96,6 @@
       const count = Math.min(chunk.samples.length - sourceStart, samples.length - destinationStart);
       if (count > 0) samples.set(chunk.samples.subarray(sourceStart, sourceStart + count), destinationStart);
     }
-    return {
-      audioBase64: ConvoLabAudio.arrayBufferToBase64(ConvoLabAudio.encodeMonoWav(samples, sampleRate)),
-      sampleRate,
-      startTimeMs: requestedStart,
-      endTimeMs: requestedEnd,
-    };
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
